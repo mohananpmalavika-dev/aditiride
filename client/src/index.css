@@ -9,32 +9,25 @@
 }
 
 /* ========================================================= */
-/* CRITICAL LEAFLET + TAILWIND FIXES                         */
-/* Tailwind's img { max-width: 100% } breaks Leaflet tiles!  */
+/* CRITICAL LEAFLET + TAILWIND CSS FIXES                     */
 /* ========================================================= */
 .leaflet-container {
   font-family: inherit;
   width: 100% !important;
   height: 100% !important;
-  background-color: #0f172a !important; /* Dark slate base */
+  background-color: #e2e8f0 !important; /* Neutral map road gray */
   z-index: 1;
 }
 
-.leaflet-container img,
-.leaflet-tile-pane img,
-.leaflet-tile,
-.leaflet-tile-container img {
+/* Fix Tailwind's global img max-width from breaking Leaflet map tiles */
+.leaflet-container img {
   max-width: none !important;
   max-height: none !important;
-  width: 256px !important;
-  height: 256px !important;
-  display: block !important;
-  visibility: visible !important;
-  opacity: 1 !important;
 }
 
-.leaflet-pane {
-  z-index: 400;
+.leaflet-tile {
+  max-width: none !important;
+  max-height: none !important;
 }
 
 .leaflet-tile-pane {
@@ -55,9 +48,9 @@
 
 .leaflet-popup-content-wrapper {
   border-radius: 1rem;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
   padding: 0.25rem;
-  background-color: #1e293b;
+  background-color: #0f172a;
   color: #f8fafc;
   border: 1px solid #334155;
 }
@@ -69,10 +62,9 @@
 }
 
 .leaflet-popup-tip {
-  background-color: #1e293b;
+  background-color: #0f172a;
 }
 
-/* Custom Marker Styling */
 .leaflet-custom-marker {
   background: transparent !important;
   border: none !important;

@@ -1,6 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { MatchedDriver } from '../../types/index.js';
+import { Layers, Map, Compass } from 'lucide-react';
 
 interface OpenStreetMapProps {
   center: { lat: number; lng: number };
@@ -14,6 +15,36 @@ interface OpenStreetMapProps {
   className?: string;
   onMapClick?: (lat: number, lng: number) => void;
 }
+
+type MapProviderKey = 'STREETS' | 'VOYAGER' | 'OSM' | 'SATELLITE';
+
+const MAP_PROVIDERS: Record<MapProviderKey, { name: string; url: string; subdomains?: string; maxZoom: number; attribution: string }> = {
+  STREETS: {
+    name: 'Streets',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+    maxZoom: 19,
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom'
+  },
+  VOYAGER: {
+    name: 'Navigation',
+    url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+    subdomains: 'abcd',
+    maxZoom: 20,
+    attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap contributors'
+  },
+  OSM: {
+    name: 'OpenStreetMap',
+    url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  },
+  SATELLITE: {
+    name: 'Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    maxZoom: 19,
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+  }
+};
 
 export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
   center,
@@ -29,8 +60,12 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const currentTileLayerRef = useRef<L.TileLayer | null>(null);
   const markersGroupRef = useRef<L.LayerGroup | null>(null);
   const polylineLayerRef = useRef<L.Polyline | null>(null);
+
+  const [selectedProvider, setSelectedProvider] = useState<MapProviderKey>('STREETS');
+  const [showLayerMenu, setShowLayerMenu] = useState(false);
 
   // Initialize Map
   useEffect(() => {
@@ -44,17 +79,20 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
       center: [initialLat, initialLng],
       zoom: zoom,
       zoomControl: false,
-      attributionControl: true
+      attributionControl: false
     });
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-    // High-Speed, Crisp CartoDB Voyager Tile Layer (Optimized for Ride-Hailing & Navigation)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd',
-      maxZoom: 20,
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    // Initial Tile Layer (ESRI World Street Map)
+    const provider = MAP_PROVIDERS[selectedProvider];
+    const tileLayer = L.tileLayer(provider.url, {
+      subdomains: provider.subdomains || 'abc',
+      maxZoom: provider.maxZoom,
+      crossOrigin: true
     }).addTo(map);
+
+    currentTileLayerRef.current = tileLayer;
 
     const markersGroup = L.layerGroup().addTo(map);
     markersGroupRef.current = markersGroup;
@@ -66,26 +104,38 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
       });
     }
 
-    // Force tile rendering recalculation on mount
+    // Force tile invalidation cycles on layout
     const t1 = setTimeout(() => map.invalidateSize(), 100);
-    const t2 = setTimeout(() => map.invalidateSize(), 300);
-    const t3 = setTimeout(() => map.invalidateSize(), 800);
+    const t2 = setTimeout(() => map.invalidateSize(), 400);
 
     return () => {
       clearTimeout(t1);
       clearTimeout(t2);
-      clearTimeout(t3);
       map.remove();
       mapInstanceRef.current = null;
     };
   }, []);
 
-  // Invalidate on any prop or container change
+  // Update Tile Layer when selectedProvider changes
   useEffect(() => {
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.invalidateSize();
+    const map = mapInstanceRef.current;
+    if (!map) return;
+
+    if (currentTileLayerRef.current) {
+      map.removeLayer(currentTileLayerRef.current);
     }
-  });
+
+    const provider = MAP_PROVIDERS[selectedProvider];
+    const newLayer = L.tileLayer(provider.url, {
+      subdomains: provider.subdomains || 'abc',
+      maxZoom: provider.maxZoom,
+      crossOrigin: true
+    }).addTo(map);
+
+    currentTileLayerRef.current = newLayer;
+    newLayer.bringToBack();
+    map.invalidateSize();
+  }, [selectedProvider]);
 
   // Update Markers & Polylines
   useEffect(() => {
@@ -110,12 +160,12 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
       const pickupIcon = createCustomIcon(`
         <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px;">
           <div style="position: absolute; width: 38px; height: 38px; border-radius: 9999px; background-color: #10b981; opacity: 0.4; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-          <div style="position: relative; width: 34px; height: 34px; border-radius: 9999px; background-color: #059669; border: 2px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: bold;">
+          <div style="position: relative; width: 34px; height: 34px; border-radius: 9999px; background-color: #059669; border: 2.5px solid white; box-shadow: 0 4px 14px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: bold;">
             📍
           </div>
         </div>
       `);
-      const m = L.marker([pickup.lat, pickup.lng], { icon: pickupIcon }).bindPopup(`<b>Pickup Location:</b><br/>${pickup.address || 'Pickup Point'}`);
+      const m = L.marker([pickup.lat, pickup.lng], { icon: pickupIcon }).bindPopup(`<b>Pickup:</b><br/>${pickup.address || 'Pickup Point'}`);
       group.addLayer(m);
       boundsPoints.push([pickup.lat, pickup.lng]);
     }
@@ -138,7 +188,7 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
     if (destination && destination.lat && destination.lng) {
       const destIcon = createCustomIcon(`
         <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px;">
-          <div style="position: relative; width: 34px; height: 34px; border-radius: 9999px; background-color: #e11d48; border: 2px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: bold;">
+          <div style="position: relative; width: 34px; height: 34px; border-radius: 9999px; background-color: #e11d48; border: 2.5px solid white; box-shadow: 0 4px 14px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: bold;">
             🏁
           </div>
         </div>
@@ -152,7 +202,7 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
     if (activeDriver && activeDriver.lat && activeDriver.lng) {
       const driverIcon = createCustomIcon(`
         <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 44px; height: 44px; transform: rotate(${activeDriver.heading || 0}deg); transition: transform 0.3s ease;">
-          <div style="width: 40px; height: 40px; border-radius: 12px; background-color: #16a34a; border: 2.5px solid white; box-shadow: 0 6px 16px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: white; font-size: 22px;">
+          <div style="width: 40px; height: 40px; border-radius: 14px; background-color: #16a34a; border: 2.5px solid white; box-shadow: 0 6px 16px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: white; font-size: 22px;">
             🚕
           </div>
         </div>
@@ -183,8 +233,8 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
     if (routePolyline && routePolyline.length > 0) {
       const poly = L.polyline(routePolyline, {
         color: '#16a34a',
-        weight: 5,
-        opacity: 0.9,
+        weight: 6,
+        opacity: 0.95,
         lineCap: 'round',
         lineJoin: 'round'
       }).addTo(map);
@@ -203,10 +253,45 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
 
   return (
     <div className="relative w-full h-full min-h-[420px] overflow-hidden" style={{ minHeight: '420px' }}>
+      
+      {/* Map Style Switcher Floating Pill */}
+      <div className="absolute top-4 right-4 z-[400] flex flex-col items-end space-y-1">
+        <button
+          onClick={() => setShowLayerMenu(!showLayerMenu)}
+          className="p-2.5 bg-slate-900/90 hover:bg-slate-800 text-white rounded-2xl shadow-xl border border-slate-700 backdrop-blur-md transition-all flex items-center space-x-1.5 text-xs font-bold"
+          title="Change Map Style"
+        >
+          <Layers className="w-4 h-4 text-brand-400" />
+          <span className="hidden sm:inline-block">{MAP_PROVIDERS[selectedProvider].name}</span>
+        </button>
+
+        {showLayerMenu && (
+          <div className="p-1.5 bg-slate-900/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-700 flex flex-col space-y-1 z-50 animate-in fade-in slide-in-from-top-2">
+            {(Object.keys(MAP_PROVIDERS) as MapProviderKey[]).map(key => (
+              <button
+                key={key}
+                onClick={() => {
+                  setSelectedProvider(key);
+                  setShowLayerMenu(false);
+                }}
+                className={`px-3 py-1.5 rounded-xl text-left text-xs font-bold transition-all ${
+                  selectedProvider === key
+                    ? 'bg-brand-600 text-white shadow-sm'
+                    : 'text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                {MAP_PROVIDERS[key].name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Leaflet DOM Container */}
       <div
         ref={mapContainerRef}
         className={className}
-        style={{ width: '100%', height: '100%', minHeight: '420px', backgroundColor: '#0f172a' }}
+        style={{ width: '100%', height: '100%', minHeight: '420px', backgroundColor: '#e2e8f0' }}
       />
     </div>
   );
