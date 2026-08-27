@@ -6,6 +6,7 @@ import { t } from '../../i18n/translations.js';
 import { OpenStreetMap } from '../common/OpenStreetMap.js';
 import { InAppChatModal } from '../common/InAppChatModal.js';
 import { InAppCallModal, CallStatus } from '../common/InAppCallModal.js';
+import { ComplaintCenterModal } from '../common/ComplaintCenterModal.js';
 import {
   Power,
   CheckCircle,
@@ -30,7 +31,12 @@ import {
   Wifi,
   Sparkles,
   Zap,
-  CheckCircle2
+  CheckCircle2,
+  Star,
+  ShieldAlert,
+  ThumbsUp,
+  ThumbsDown,
+  Heart
 } from 'lucide-react';
 
 interface DriverHomeProps {
@@ -70,6 +76,15 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   const [customBaseFare, setCustomBaseFare] = useState(85.0);
   const [freePickupKm, setFreePickupKm] = useState(3.0);
   const [pickupChargePerKm, setPickupChargePerKm] = useState(10.0);
+
+  // Post-Trip Passenger Rating & Grievance Modal
+  const [showDriverRatingModal, setShowDriverRatingModal] = useState(false);
+  const [completedTripForRating, setCompletedTripForRating] = useState<any>(null);
+  const [passengerRatingScore, setPassengerRatingScore] = useState(5);
+  const [passengerFeedbackComment, setPassengerFeedbackComment] = useState('');
+  const [selectedPassengerTags, setSelectedPassengerTags] = useState<string[]>([]);
+  const [blockPassengerAfterTrip, setBlockPassengerAfterTrip] = useState(false);
+  const [showComplaintModal, setShowComplaintModal] = useState(false);
 
   // Earnings
   const [earnings, setEarnings] = useState<{ todayEarnings: number; totalGrossFare: number; totalCommissionPaid: number; history: any[] }>({
@@ -516,11 +531,42 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
         actualDistanceKm: activeTrip.distance_km,
         actualDurationMin: activeTrip.duration_min
       });
-      alert(`Trip completed successfully! Fare: ₹${res.booking.final_fare}`);
+      const finished = res.booking || activeTrip;
+      setCompletedTripForRating(finished);
       setActiveTrip(null);
+      setPassengerLiveLocation(null);
+      setShowDriverRatingModal(true);
       loadDriverData();
     } catch (err: any) {
       alert(err.message || 'Failed to complete trip');
+    }
+  };
+
+  const handleSubmitPassengerRating = async () => {
+    if (!completedTripForRating) return;
+    try {
+      await api.rateBooking(completedTripForRating.id, {
+        rating: passengerRatingScore,
+        tags: selectedPassengerTags,
+        comment: passengerFeedbackComment
+      });
+
+      if (blockPassengerAfterTrip && completedTripForRating.passenger_id) {
+        await api.blockUser(completedTripForRating.passenger_id, {
+          reason: `Driver block: ${passengerFeedbackComment || 'Passenger misconduct'}`,
+          blockType: 'DRIVER_TO_PASSENGER'
+        });
+      }
+
+      setShowDriverRatingModal(false);
+      setCompletedTripForRating(null);
+      setPassengerRatingScore(5);
+      setPassengerFeedbackComment('');
+      setSelectedPassengerTags([]);
+      setBlockPassengerAfterTrip(false);
+      alert('Passenger rating recorded successfully!');
+    } catch (err: any) {
+      alert(err.message || 'Failed to submit passenger rating');
     }
   };
 
@@ -641,6 +687,14 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
           >
             <Sliders className="w-4 h-4 text-brand-400" />
             <span>Pricing</span>
+          </button>
+
+          <button
+            onClick={() => setShowComplaintModal(true)}
+            className="flex items-center space-x-1.5 px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 rounded-2xl text-xs font-bold text-rose-300 transition-colors"
+          >
+            <ShieldAlert className="w-4 h-4 text-rose-400" />
+            <span>Grievances</span>
           </button>
 
           <button
@@ -1137,6 +1191,134 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
           </div>
         </div>
       )}
+
+      {/* Driver Post-Trip Passenger Rating Modal */}
+      {showDriverRatingModal && completedTripForRating && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in zoom-in-95">
+          <div className="w-full max-w-md bg-slate-900 rounded-3xl p-6 shadow-2xl border-2 border-emerald-500 space-y-5 text-center">
+            
+            <div className="w-16 h-16 rounded-full bg-emerald-950/80 border border-emerald-600 text-emerald-400 flex items-center justify-center mx-auto shadow-md">
+              <Star className="w-8 h-8 fill-emerald-400" />
+            </div>
+
+            <div>
+              <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-950 px-2.5 py-0.5 rounded-full border border-emerald-800">
+                TRIP COMPLETED • #{completedTripForRating.booking_number}
+              </span>
+              <h3 className="text-xl font-extrabold text-white mt-2">Rate Your Passenger</h3>
+              <p className="text-xs text-slate-400 font-medium mt-0.5">
+                How was your trip with <strong className="text-white">{completedTripForRating.passenger_name || 'Passenger'}</strong>?
+              </p>
+            </div>
+
+            {/* Interactive 5-Star Selector */}
+            <div className="flex justify-center space-x-3 py-2">
+              {[1, 2, 3, 4, 5].map(star => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => setPassengerRatingScore(star)}
+                  className="transition-transform hover:scale-125 active:scale-95 focus:outline-none"
+                >
+                  <Star
+                    className={`w-9 h-9 ${
+                      star <= passengerRatingScore
+                        ? 'text-amber-400 fill-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]'
+                        : 'text-slate-700'
+                    }`}
+                  />
+                </button>
+              ))}
+            </div>
+
+            {/* Quick Feedback Tags */}
+            <div className="flex flex-wrap gap-2 justify-center">
+              {[
+                '⭐ Polite & Respectful',
+                '⏱️ Ready on Time',
+                '🧼 Clean & Orderly',
+                '⏳ Delayed at Pickup',
+                '🗣️ Rude Behavior',
+                '💸 Payment Disputed'
+              ].map(tag => {
+                const isSelected = selectedPassengerTags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      setSelectedPassengerTags(prev =>
+                        isSelected ? prev.filter(t => t !== tag) : [...prev, tag]
+                      );
+                    }}
+                    className={`text-xs px-3 py-1.5 rounded-full font-bold transition-all border ${
+                      isSelected
+                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Feedback Comment */}
+            <textarea
+              rows={2}
+              placeholder="Leave notes or comments for passenger feedback..."
+              value={passengerFeedbackComment}
+              onChange={e => setPassengerFeedbackComment(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white focus:outline-none focus:border-brand-500 resize-none font-medium"
+            />
+
+            {/* Block Passenger Option */}
+            <label className="flex items-center justify-between p-3 bg-slate-950/60 rounded-2xl border border-slate-800 cursor-pointer text-left">
+              <div>
+                <p className="text-xs font-bold text-slate-300">🚫 Do not match with this passenger again</p>
+                <p className="text-[10px] text-slate-500">Adds bilateral block to prevent future ride offers</p>
+              </div>
+              <input
+                type="checkbox"
+                checked={blockPassengerAfterTrip}
+                onChange={e => setBlockPassengerAfterTrip(e.target.checked)}
+                className="w-4 h-4 accent-rose-500 rounded"
+              />
+            </label>
+
+            {/* Action Buttons: Submit vs File Complaint */}
+            <div className="space-y-2 pt-1">
+              <button
+                onClick={handleSubmitPassengerRating}
+                className="w-full py-4 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white rounded-2xl font-extrabold text-sm shadow-xl shadow-emerald-600/30 transition-transform active:scale-98"
+              >
+                Submit Rating & Continue
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDriverRatingModal(false);
+                  setShowComplaintModal(true);
+                }}
+                className="w-full py-2.5 text-xs font-bold text-rose-400 hover:text-rose-300 flex items-center justify-center space-x-1.5 transition-colors"
+              >
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>Report Serious Misconduct / File Grievance</span>
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* Grievance & Complaints Modal */}
+      <ComplaintCenterModal
+        isOpen={showComplaintModal}
+        onClose={() => setShowComplaintModal(false)}
+        currentUser={currentUser}
+        preselectedBooking={activeTrip || completedTripForRating}
+      />
 
     </div>
   );

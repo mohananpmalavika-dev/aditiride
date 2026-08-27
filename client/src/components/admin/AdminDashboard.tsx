@@ -18,7 +18,8 @@ import {
   Search,
   Zap,
   Lock,
-  Layers
+  Layers,
+  ShieldAlert
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -27,7 +28,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, language }) => {
-  const [activeTab, setActiveTab] = useState<'OPERATIONS' | 'PRICING' | 'DOCUMENTS' | 'BLOCKS' | 'FRAUD' | 'AUDIT'>('OPERATIONS');
+  const [activeTab, setActiveTab] = useState<'OPERATIONS' | 'PRICING' | 'DOCUMENTS' | 'COMPLAINTS' | 'FRAUD' | 'AUDIT'>('OPERATIONS');
 
   const [metrics, setMetrics] = useState<any>({
     totalBookings: 0,
@@ -45,29 +46,38 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [anomalies, setAnomalies] = useState<any[]>([]);
   const [surgeZones, setSurgeZones] = useState<any[]>([]);
+  const [complaints, setComplaints] = useState<any[]>([]);
+
+  // Complaints Resolution State
+  const [selectedComplaint, setSelectedComplaint] = useState<any | null>(null);
+  const [resolutionStatus, setResolutionStatus] = useState<'RESOLVED' | 'UNDER_REVIEW' | 'REJECTED'>('RESOLVED');
+  const [resolutionNotes, setResolutionNotes] = useState('');
+  const [resolutionAction, setResolutionAction] = useState<'NONE' | 'REFUND_WALLET' | 'SUSPEND_DRIVER' | 'WARN_USER'>('NONE');
+  const [refundAmount, setRefundAmount] = useState<number>(0);
+  const [isResolving, setIsResolving] = useState(false);
 
   // Editing Category state
   const [editingCategory, setEditingCategory] = useState<VehicleCategory | null>(null);
 
   const loadAdminData = async () => {
     try {
-      const dashRes = await api.getAdminDashboard();
-      setMetrics(dashRes.metrics);
+      const [dashRes, catRes, docRes, auditRes, fraudRes, surgeRes, compRes] = await Promise.all([
+        api.getAdminDashboard(),
+        api.getCategories(),
+        api.getDriverDocuments(),
+        api.getAuditLogs(),
+        api.getFraudAnomalies(),
+        api.getSurgeZones(),
+        api.getAdminComplaints()
+      ]);
 
-      const catRes = await api.getCategories();
-      setCategories(catRes.categories || []);
-
-      const docRes = await api.getDriverDocuments();
-      setDocuments(docRes.documents || []);
-
-      const auditRes = await api.getAuditLogs();
-      setAuditLogs(auditRes.logs || []);
-
-      const fraudRes = await api.getFraudAnomalies();
-      setAnomalies(fraudRes.anomalies || []);
-
-      const surgeRes = await api.getSurgeZones();
-      setSurgeZones(surgeRes.zones || []);
+      if (dashRes.metrics) setMetrics(dashRes.metrics);
+      if (catRes.categories) setCategories(catRes.categories);
+      if (docRes.documents) setDocuments(docRes.documents);
+      if (auditRes.logs) setAuditLogs(auditRes.logs);
+      if (fraudRes.anomalies) setAnomalies(fraudRes.anomalies);
+      if (surgeRes.zones) setSurgeZones(surgeRes.zones);
+      if (compRes.complaints) setComplaints(compRes.complaints);
     } catch (err) {
       console.error('Error loading admin data:', err);
     }
@@ -109,6 +119,29 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
     }
   };
 
+  const handleResolveComplaint = async () => {
+    if (!selectedComplaint) return;
+    setIsResolving(true);
+    try {
+      await api.resolveComplaint(selectedComplaint.id, {
+        status: resolutionStatus,
+        resolutionNotes,
+        action: resolutionAction,
+        refundAmount: resolutionAction === 'REFUND_WALLET' ? refundAmount : 0
+      });
+      alert(`Complaint #${selectedComplaint.ticket_number} resolved successfully!`);
+      setSelectedComplaint(null);
+      setResolutionNotes('');
+      setResolutionAction('NONE');
+      setRefundAmount(0);
+      loadAdminData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to resolve complaint');
+    } finally {
+      setIsResolving(false);
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 space-y-6">
       
@@ -137,6 +170,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
             { id: 'OPERATIONS', label: 'Live Ops', icon: Activity },
             { id: 'PRICING', label: 'Pricing & Categories', icon: Sliders },
             { id: 'DOCUMENTS', label: `KYC (${documents.filter(d => d.verification_status === 'PENDING').length})`, icon: FileCheck },
+            { id: 'COMPLAINTS', label: `Grievances (${complaints.filter(c => c.status === 'OPEN' || c.status === 'UNDER_REVIEW').length})`, icon: ShieldAlert },
             { id: 'FRAUD', label: `Risk (${anomalies.length})`, icon: AlertTriangle },
             { id: 'AUDIT', label: 'Audit Trail', icon: Layers }
           ].map(tab => {
@@ -348,6 +382,134 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
         </div>
       )}
 
+      {/* Tab: Grievance & Complaints Investigation and Resolution */}
+      {activeTab === 'COMPLAINTS' && (
+        <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 space-y-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-extrabold text-lg text-slate-900 dark:text-white">Grievance & Dispute Resolution Desk</h3>
+              <p className="text-xs text-slate-400">Investigate complaints against drivers, passengers, rides, fares, and safety issues</p>
+            </div>
+            <div className="flex items-center space-x-2">
+              <span className="text-xs font-bold text-slate-400">Total Cases: {complaints.length}</span>
+            </div>
+          </div>
+
+          {complaints.length === 0 ? (
+            <p className="text-xs text-slate-400">No active grievances or complaints filed on the platform.</p>
+          ) : (
+            <div className="space-y-3">
+              {complaints.map(comp => {
+                const isResolved = comp.status === 'RESOLVED';
+                const isUnderReview = comp.status === 'UNDER_REVIEW';
+                const isCritical = comp.severity === 'CRITICAL';
+                return (
+                  <div
+                    key={comp.id}
+                    className={`p-5 rounded-2xl border transition-all space-y-3 text-xs ${
+                      isCritical
+                        ? 'bg-rose-950/20 border-rose-800/80'
+                        : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex items-center space-x-2">
+                        <span className="font-mono font-bold text-brand-500 bg-brand-950 px-2 py-0.5 rounded-lg border border-brand-800">
+                          #{comp.ticket_number}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 uppercase">
+                          Target: {comp.target_type}
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                            isCritical
+                              ? 'bg-rose-600 text-white animate-pulse'
+                              : comp.severity === 'HIGH'
+                              ? 'bg-amber-600 text-white'
+                              : 'bg-slate-600 text-slate-200'
+                          }`}
+                        >
+                          {comp.severity} SEVERITY
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            isResolved
+                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-700'
+                              : isUnderReview
+                              ? 'bg-amber-950 text-amber-400 border border-amber-700'
+                              : 'bg-rose-950 text-rose-400 border border-rose-700'
+                          }`}
+                        >
+                          {comp.status}
+                        </span>
+
+                        <button
+                          onClick={() => {
+                            setSelectedComplaint(comp);
+                            setResolutionStatus(comp.status === 'OPEN' ? 'RESOLVED' : comp.status);
+                            setResolutionNotes(comp.resolution_notes || '');
+                          }}
+                          className="px-3 py-1 bg-brand-600 hover:bg-brand-700 text-white rounded-xl font-bold text-xs shadow-sm"
+                        >
+                          Investigate & Resolve
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <h4 className="font-extrabold text-sm text-slate-900 dark:text-white">{comp.title}</h4>
+                      <p className="text-slate-600 dark:text-slate-300 font-medium mt-1">{comp.description}</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 p-3 bg-white/60 dark:bg-slate-950/60 rounded-xl text-[11px] border border-slate-200 dark:border-slate-800">
+                      <div>
+                        <span className="text-slate-400 block font-semibold">Complainant ({comp.complainant_role}):</span>
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          {comp.complainant_name} ({comp.complainant_phone || 'No phone'})
+                        </span>
+                      </div>
+
+                      {comp.target_user_name && (
+                        <div>
+                          <span className="text-slate-400 block font-semibold">Target Entity:</span>
+                          <span className="font-bold text-slate-900 dark:text-white">
+                            {comp.target_user_name} ({comp.target_user_phone || 'No phone'})
+                          </span>
+                        </div>
+                      )}
+
+                      {comp.booking_number && (
+                        <div>
+                          <span className="text-slate-400 block font-semibold">Associated Ride:</span>
+                          <span className="font-mono font-bold text-brand-400">
+                            #{comp.booking_number} (₹{comp.final_fare || comp.fare_estimate})
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    {comp.resolution_notes && (
+                      <div className="p-3 bg-emerald-950/40 border border-emerald-800/60 rounded-xl text-xs space-y-0.5">
+                        <p className="font-bold text-emerald-400">Official Admin Resolution:</p>
+                        <p className="text-slate-300 text-[11px]">{comp.resolution_notes}</p>
+                        {comp.resolved_by_name && (
+                          <p className="text-[10px] text-slate-500">
+                            Investigated by {comp.resolved_by_name} on {new Date(comp.resolved_at).toLocaleString()}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Tab 4: Fraud & Risk Monitor */}
       {activeTab === 'FRAUD' && (
         <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 space-y-4">
@@ -389,6 +551,118 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
                 <span className="text-slate-400 text-[10px]">{log.created_at}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Complaint Resolution Modal */}
+      {selectedComplaint && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in zoom-in-95">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl p-6 space-y-4 text-white">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div>
+                <span className="text-[10px] font-mono text-brand-400 font-bold bg-brand-950 px-2 py-0.5 rounded border border-brand-800">
+                  GRIEVANCE #{selectedComplaint.ticket_number}
+                </span>
+                <h3 className="text-base font-extrabold mt-1">Investigate & Resolve Ticket</h3>
+              </div>
+              <button
+                onClick={() => setSelectedComplaint(null)}
+                className="w-8 h-8 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-slate-950 rounded-2xl border border-slate-800 space-y-1 text-xs">
+              <p className="font-bold text-slate-200">{selectedComplaint.title}</p>
+              <p className="text-slate-400 text-[11px]">{selectedComplaint.description}</p>
+            </div>
+
+            {/* Status Selection */}
+            <div>
+              <label className="block text-xs font-bold text-slate-300 mb-1">Set Resolution Status</label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['RESOLVED', 'UNDER_REVIEW', 'REJECTED'] as const).map(st => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => setResolutionStatus(st)}
+                    className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                      resolutionStatus === st
+                        ? st === 'RESOLVED'
+                          ? 'bg-emerald-600 border-emerald-500 text-white'
+                          : st === 'UNDER_REVIEW'
+                          ? 'bg-amber-600 border-amber-500 text-white'
+                          : 'bg-rose-600 border-rose-500 text-white'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    {st}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Disciplinary / Remedial Action */}
+            <div>
+              <label className="block text-xs font-bold text-slate-300 mb-1">Remedial Action</label>
+              <select
+                value={resolutionAction}
+                onChange={e => setResolutionAction(e.target.value as any)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:border-brand-500 font-medium"
+              >
+                <option value="NONE">No Disciplinary Action (Standard Resolution)</option>
+                <option value="REFUND_WALLET">💰 Credit Wallet Refund to Complainant</option>
+                <option value="SUSPEND_DRIVER">🚫 Suspend Target Driver Account</option>
+                <option value="WARN_USER">⚠️ Issue Formal Warning Notice</option>
+              </select>
+            </div>
+
+            {resolutionAction === 'REFUND_WALLET' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">Refund Amount (₹)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="5000"
+                  value={refundAmount || ''}
+                  onChange={e => setRefundAmount(parseFloat(e.target.value) || 0)}
+                  placeholder="e.g. 150"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:border-brand-500 font-bold"
+                />
+              </div>
+            )}
+
+            {/* Resolution Notes */}
+            <div>
+              <label className="block text-xs font-bold text-slate-300 mb-1">Investigation Notes & Redressal Decision *</label>
+              <textarea
+                rows={3}
+                placeholder="Document finding details and action taken for customer / captain record..."
+                value={resolutionNotes}
+                onChange={e => setResolutionNotes(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-white focus:border-brand-500 resize-none font-medium"
+              />
+            </div>
+
+            <div className="flex space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setSelectedComplaint(null)}
+                className="w-1/2 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isResolving || !resolutionNotes.trim()}
+                onClick={handleResolveComplaint}
+                className="w-1/2 py-3 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 text-white rounded-xl font-extrabold text-xs shadow-lg shadow-brand-500/25"
+              >
+                {isResolving ? 'Updating...' : 'Save Resolution'}
+              </button>
+            </div>
           </div>
         </div>
       )}

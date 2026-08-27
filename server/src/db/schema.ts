@@ -373,6 +373,27 @@ CREATE TABLE IF NOT EXISTS support_tickets (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Complaints & Grievance Redressal (Passenger / Driver / Ride / Fare)
+CREATE TABLE IF NOT EXISTS complaints (
+  id TEXT PRIMARY KEY,
+  ticket_number TEXT UNIQUE NOT NULL,
+  complainant_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  complainant_role TEXT NOT NULL DEFAULT 'PASSENGER',
+  target_type TEXT NOT NULL DEFAULT 'DRIVER',
+  target_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
+  category TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'MEDIUM',
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  resolution_notes TEXT,
+  resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+  resolved_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Immutable Audit Logs
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,

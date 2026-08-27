@@ -260,5 +260,19 @@ export const api = {
   // Chat
   getChatHistory: (bookingId: string) => fetchApi(`/chat/${bookingId}`),
   getChatMessages: (bookingId: string) => fetchApi(`/chat/${bookingId}`),
-  sendChatMessage: (bookingId: string, payload: any) => fetchApi(`/chat/${bookingId}`, { method: 'POST', body: JSON.stringify(payload) })
+  sendChatMessage: (bookingId: string, payload: any) => fetchApi(`/chat/${bookingId}`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Ratings & Complaints / Grievance Redressal
+  getMyRatings: () => fetchApi('/ratings/my'),
+  createComplaint: (payload: any) => fetchApi('/complaints', { method: 'POST', body: JSON.stringify(payload) }),
+  getMyComplaints: () => fetchApi('/complaints/my'),
+  getAdminComplaints: (params?: { status?: string; targetType?: string; severity?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.status) q.append('status', params.status);
+    if (params?.targetType) q.append('targetType', params.targetType);
+    if (params?.severity) q.append('severity', params.severity);
+    return fetchApi(`/admin/complaints?${q.toString()}`);
+  },
+  resolveComplaint: (id: string, payload: any) =>
+    fetchApi(`/admin/complaints/${id}/resolve`, { method: 'PUT', body: JSON.stringify(payload) })
 };

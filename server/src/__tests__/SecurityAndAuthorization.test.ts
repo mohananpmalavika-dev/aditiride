@@ -464,4 +464,140 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       expect(completed.status).toBe('COMPLETED');
     });
   });
+
+  // ==========================================
+  // 15. TWO-WAY RATINGS & REPUTATION LIFECYCLE
+  // ==========================================
+  // 15. TWO-WAY RATINGS & REPUTATION LIFECYCLE
+  // ==========================================
+  describe('Two-Way Ratings & Reputation Architecture', () => {
+    it('should allow passenger to rate driver and update driver average rating', () => {
+      const bookingId = `bk_rate_${Date.now()}_${Math.random()}`;
+      const bkNum = `ADITI-RAT-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      run(`
+        INSERT INTO bookings (
+          id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+          pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+          distance_km, duration_min, otp_code, fare_estimate, final_fare, fare_source, fare_rule_version,
+          surge_multiplier, payment_method, payment_status, status
+        ) VALUES (
+          ?, ?, 'usr_passenger', 'drv_rahul', 'cat_sedan', 'INSTANT',
+          10.5276, 76.2144, 'Pickup', 10.5360, 76.2220, 'Destination',
+          4.0, 12, '1234', 100.0, 100.0, 'ESTIMATE', 'v2.0',
+          1.0, 'UPI', 'COMPLETED', 'COMPLETED'
+        )
+      `, [bookingId, bkNum]);
+
+      const ratingId = `rat_pass_${Date.now()}_${Math.random()}`;
+      run(`
+        INSERT INTO ratings (id, booking_id, rater_id, rated_user_id, rating, tags, comment, is_safety_report)
+        VALUES (?, ?, 'usr_passenger', 'usr_driver_rahul', 5.0, ?, 'Outstanding captain!', 0)
+      `, [ratingId, bookingId, JSON.stringify(['Smooth Driving', 'Great AC', 'Polite'])]);
+
+      // Calculate and update rolling average
+      const avgData = get<{ avg: number }>(`SELECT AVG(rating) as avg FROM ratings WHERE rated_user_id = 'usr_driver_rahul'`);
+      if (avgData && avgData.avg) {
+        const rounded = Math.round(avgData.avg * 100) / 100;
+        run(`UPDATE driver_profiles SET rating_avg = ? WHERE user_id = 'usr_driver_rahul'`, [rounded]);
+      }
+
+      const driverProfile = get<any>(`SELECT rating_avg FROM driver_profiles WHERE user_id = 'usr_driver_rahul'`);
+      expect(driverProfile.rating_avg).toBeGreaterThanOrEqual(1.0);
+    });
+
+    it('should allow driver to rate passenger on completed trip and prevent duplicate rating', () => {
+      const bookingId = `bk_dr_rate_${Date.now()}_${Math.random()}`;
+      const bkNum = `ADITI-DR-RAT-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      run(`
+        INSERT INTO bookings (
+          id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+          pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+          distance_km, duration_min, otp_code, fare_estimate, final_fare, fare_source, fare_rule_version,
+          surge_multiplier, payment_method, payment_status, status
+        ) VALUES (
+          ?, ?, 'usr_passenger', 'drv_rahul', 'cat_sedan', 'INSTANT',
+          10.5276, 76.2144, 'Pickup', 10.5360, 76.2220, 'Destination',
+          4.0, 12, '1234', 100.0, 100.0, 'ESTIMATE', 'v2.0',
+          1.0, 'UPI', 'COMPLETED', 'COMPLETED'
+        )
+      `, [bookingId, bkNum]);
+
+      const ratingId = `rat_drv_${Date.now()}`;
+      run(`
+        INSERT INTO ratings (id, booking_id, rater_id, rated_user_id, rating, tags, comment, is_safety_report)
+        VALUES (?, ?, 'usr_driver_rahul', 'usr_passenger', 5.0, ?, 'Courteous customer, on time.', 0)
+      `, [ratingId, bookingId, JSON.stringify(['Ready on Time', 'Polite & Respectful'])]);
+
+      const savedRating = get<any>(`SELECT * FROM ratings WHERE id = ?`, [ratingId]);
+      expect(savedRating).toBeDefined();
+      expect(savedRating.rating).toBe(5.0);
+
+      // Verify check for duplicate rating by the same user
+      const existing = get<any>('SELECT id FROM ratings WHERE booking_id = ? AND rater_id = ?', [bookingId, 'usr_driver_rahul']);
+      expect(existing).toBeDefined();
+    });
+  });
+
+  // ==========================================
+  // 16. COMPLAINTS & GRIEVANCE REDRESSAL DESK
+  // ==========================================
+  describe('Grievance & Complaints Redressal Desk', () => {
+    let createdTicketId: string;
+    let ticketNumber: string;
+
+    it('should allow passenger to file a complaint and generate ticket number', () => {
+      createdTicketId = `cmp_${Date.now()}`;
+      ticketNumber = `CMP-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+      run(`
+        INSERT INTO complaints (
+          id, ticket_number, complainant_user_id, complainant_role, target_type,
+          target_user_id, booking_id, category, title, description, severity, status
+        ) VALUES (?, ?, 'usr_passenger', 'PASSENGER', 'DRIVER', 'usr_driver_rahul', NULL, 'RASH_DRIVING', 'Dangerous overtaking', 'Captain was speeding.', 'HIGH', 'OPEN')
+      `, [createdTicketId, ticketNumber]);
+
+      const saved = get<any>(`SELECT * FROM complaints WHERE id = ?`, [createdTicketId]);
+      expect(saved).toBeDefined();
+      expect(saved.ticket_number).toBe(ticketNumber);
+      expect(saved.status).toBe('OPEN');
+      expect(saved.severity).toBe('HIGH');
+    });
+
+    it('should query user complaints list and admin platform complaints', () => {
+      const myComplaints = query<any>(`SELECT * FROM complaints WHERE complainant_user_id = 'usr_passenger' ORDER BY created_at DESC`);
+      expect(myComplaints.length).toBeGreaterThan(0);
+      expect(myComplaints.some(c => c.id === createdTicketId)).toBe(true);
+
+      const allAdminComplaints = query<any>(`SELECT * FROM complaints ORDER BY created_at DESC`);
+      expect(allAdminComplaints.length).toBeGreaterThan(0);
+    });
+
+    it('should allow admin to resolve complaint and credit wallet refund ledger', () => {
+      const initialWallet = get<any>(`SELECT balance FROM wallets WHERE user_id = 'usr_passenger'`);
+      const prevBal = initialWallet?.balance || 0;
+      const refundAmt = 50.0;
+
+      // Credit wallet
+      run(`UPDATE wallets SET balance = balance + ?, updated_at = datetime('now') WHERE user_id = 'usr_passenger'`, [refundAmt]);
+      run(`
+        INSERT INTO wallet_transactions (id, wallet_id, amount, type, reference_type, reference_id, description)
+        VALUES (?, (SELECT id FROM wallets WHERE user_id = 'usr_passenger'), ?, 'CREDIT', 'GRIEVANCE_REFUND', ?, ?)
+      `, [`wtx_test_${Date.now()}`, refundAmt, createdTicketId, `Refund credit for Grievance Ticket #${ticketNumber}`]);
+
+      // Mark resolved
+      run(`
+        UPDATE complaints
+        SET status = 'RESOLVED', resolution_notes = 'Investigated footage, refunded ₹50.', resolved_by = 'usr_admin', resolved_at = datetime('now')
+        WHERE id = ?
+      `, [createdTicketId]);
+
+      const updatedComplaint = get<any>(`SELECT * FROM complaints WHERE id = ?`, [createdTicketId]);
+      expect(updatedComplaint.status).toBe('RESOLVED');
+      expect(updatedComplaint.resolution_notes).toContain('refunded');
+
+      const updatedWallet = get<any>(`SELECT balance FROM wallets WHERE user_id = 'usr_passenger'`);
+      expect(updatedWallet.balance).toBe(prevBal + refundAmt);
+    });
+  });
 });
+

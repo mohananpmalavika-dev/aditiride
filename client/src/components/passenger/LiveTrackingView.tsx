@@ -7,6 +7,7 @@ import { t } from '../../i18n/translations.js';
 import { OpenStreetMap } from '../common/OpenStreetMap.js';
 import { InAppChatModal } from '../common/InAppChatModal.js';
 import { InAppCallModal, CallStatus } from '../common/InAppCallModal.js';
+import { ComplaintCenterModal } from '../common/ComplaintCenterModal.js';
 import {
   Shield,
   Phone,
@@ -24,7 +25,8 @@ import {
   Download,
   Car,
   Volume2,
-  QrCode
+  QrCode,
+  ShieldAlert
 } from 'lucide-react';
 
 interface LiveTrackingViewProps {
@@ -60,6 +62,7 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
   const [feedbackComment, setFeedbackComment] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [addToFavorites, setAddToFavorites] = useState(false);
+  const [showComplaintModal, setShowComplaintModal] = useState(false);
 
   const socket = getSocket();
 
@@ -627,35 +630,80 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
 
       {/* 5-Star Rating & Favorite Driver Modal on Completion */}
       {showRatingModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in zoom-in-95">
-          <div className="w-full max-w-md bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-800 space-y-5 text-center text-slate-100">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in zoom-in-95">
+          <div className="w-full max-w-md bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-800 space-y-5 text-center text-slate-100 max-h-[90vh] overflow-y-auto">
             <div className="w-16 h-16 rounded-3xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto ring-4 ring-emerald-500/20">
               <CheckCircle className="w-8 h-8" />
             </div>
 
             <div className="space-y-1">
-              <h3 className="text-xl font-black text-white">Ride Completed!</h3>
+              <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-950 px-2.5 py-0.5 rounded-full border border-emerald-800">
+                RIDE COMPLETED • #{booking.booking_number}
+              </span>
+              <h3 className="text-xl font-black text-white mt-1">Rate Your Captain</h3>
               <p className="text-xs text-slate-400">Total settled: ₹{booking.final_fare || booking.fare_estimate}</p>
             </div>
 
+            {/* 5-Star Selector */}
             <div className="space-y-2">
-              <p className="text-xs font-bold text-slate-300">Rate your experience with {booking.driver_name}</p>
+              <p className="text-xs font-bold text-slate-300">How was your ride with {booking.driver_name}?</p>
               <div className="flex items-center justify-center space-x-2">
                 {[1, 2, 3, 4, 5].map(star => (
                   <button
                     key={star}
                     onClick={() => setRatingScore(star)}
-                    className="p-1 text-2xl transition-transform hover:scale-125 focus:outline-none"
+                    className="p-1 transition-transform hover:scale-125 focus:outline-none"
                   >
                     <Star
-                      className={`w-7 h-7 ${
-                        star <= ratingScore ? 'text-amber-400 fill-amber-400' : 'text-slate-700'
+                      className={`w-8 h-8 ${
+                        star <= ratingScore ? 'text-amber-400 fill-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.5)]' : 'text-slate-700'
                       }`}
                     />
                   </button>
                 ))}
               </div>
             </div>
+
+            {/* Feedback Tags */}
+            <div className="flex flex-wrap gap-2 justify-center">
+              {[
+                '🌟 Smooth Driving',
+                '❄️ Great AC',
+                '🧼 Clean Car',
+                '🛡️ Safe Route',
+                '🗣️ Polite & Helpful',
+                '🧭 Accurate Navigation'
+              ].map(tag => {
+                const isSelected = selectedTags.includes(tag);
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => {
+                      setSelectedTags(prev =>
+                        isSelected ? prev.filter(t => t !== tag) : [...prev, tag]
+                      );
+                    }}
+                    className={`text-xs px-3 py-1.5 rounded-full font-bold transition-all border ${
+                      isSelected
+                        ? 'bg-brand-600 border-brand-500 text-white shadow-sm'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                    }`}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Written Comment */}
+            <textarea
+              rows={2}
+              placeholder="Leave feedback or a nice note for captain..."
+              value={feedbackComment}
+              onChange={e => setFeedbackComment(e.target.value)}
+              className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-3 text-xs text-white focus:outline-none focus:border-brand-500 resize-none font-medium"
+            />
 
             {/* Favorite Captain Toggle */}
             <div
@@ -673,12 +721,26 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
               <input type="checkbox" checked={addToFavorites} readOnly className="rounded text-rose-600" />
             </div>
 
-            <button
-              onClick={handleSubmitRating}
-              className="w-full py-3.5 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-extrabold text-sm shadow-xl shadow-brand-500/25 transition-transform active:scale-95"
-            >
-              Submit & Finish
-            </button>
+            <div className="space-y-2">
+              <button
+                onClick={handleSubmitRating}
+                className="w-full py-3.5 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-extrabold text-sm shadow-xl shadow-brand-500/25 transition-transform active:scale-95"
+              >
+                Submit Rating & Finish
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowRatingModal(false);
+                  setShowComplaintModal(true);
+                }}
+                className="w-full py-2 text-xs font-bold text-rose-400 hover:text-rose-300 flex items-center justify-center space-x-1.5 transition-colors"
+              >
+                <ShieldAlert className="w-3.5 h-3.5" />
+                <span>Have an issue with this trip? File a Grievance</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -720,6 +782,17 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Grievance & Complaints Modal */}
+      <ComplaintCenterModal
+        isOpen={showComplaintModal}
+        onClose={() => {
+          setShowComplaintModal(false);
+          onTripFinished();
+        }}
+        currentUser={currentUser}
+        preselectedBooking={booking}
+      />
 
     </div>
   );

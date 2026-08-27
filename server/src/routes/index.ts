@@ -753,6 +753,226 @@ apiRouter.post('/bookings/:id/rate', authenticateToken, (req: Request, res: Resp
   res.json({ success: true, ratingId, message: 'Rating submitted successfully' });
 });
 
+apiRouter.get('/ratings/my', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const userId = authReq.user.id;
+
+  const given = query<any>(`
+    SELECT r.*, u.name as rated_name, u.role as rated_role, b.booking_number
+    FROM ratings r
+    JOIN users u ON r.rated_user_id = u.id
+    JOIN bookings b ON r.booking_id = b.id
+    WHERE r.rater_id = ?
+    ORDER BY r.created_at DESC
+  `, [userId]);
+
+  const received = query<any>(`
+    SELECT r.*, u.name as rater_name, u.avatar_url as rater_avatar, b.booking_number
+    FROM ratings r
+    JOIN users u ON r.rater_id = u.id
+    JOIN bookings b ON r.booking_id = b.id
+    WHERE r.rated_user_id = ?
+    ORDER BY r.created_at DESC
+  `, [userId]);
+
+  res.json({
+    given: given.map(g => ({ ...g, tags: JSON.parse(g.tags || '[]') })),
+    received: received.map(r => ({ ...r, tags: JSON.parse(r.tags || '[]') }))
+  });
+});
+
+// ==========================================
+// 6B. COMPLAINTS & GRIEVANCE REDRESSAL (Passenger, Driver, Ride & Fare)
+// ==========================================
+apiRouter.post('/complaints', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const complainantId = authReq.user.id;
+  const complainantRole = authReq.user.role;
+
+  const {
+    bookingId,
+    targetType,
+    targetUserId,
+    category,
+    title,
+    description,
+    severity
+  } = req.body;
+
+  if (!category || !title || !description) {
+    return res.status(400).json({ error: 'Category, title, and detailed description are required.' });
+  }
+
+  let authoritativeTargetUserId = targetUserId || null;
+  let authoritativeBookingId = bookingId || null;
+
+  // If a booking is specified, derive counterpart target user if not explicitly passed
+  if (bookingId) {
+    const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [bookingId]);
+    if (booking) {
+      if (!authoritativeTargetUserId) {
+        if (complainantRole === 'PASSENGER' && booking.driver_id) {
+          const drv = get<{ user_id: string }>('SELECT user_id FROM driver_profiles WHERE id = ?', [booking.driver_id]);
+          authoritativeTargetUserId = drv?.user_id || null;
+        } else if (complainantRole === 'DRIVER') {
+          authoritativeTargetUserId = booking.passenger_id;
+        }
+      }
+    }
+  }
+
+  const complaintId = `cmp_${uuidv4().substring(0, 8)}`;
+  const ticketNumber = `CMP-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+  run(`
+    INSERT INTO complaints (
+      id, ticket_number, complainant_user_id, complainant_role, target_type,
+      target_user_id, booking_id, category, title, description, severity, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')
+  `, [
+    complaintId,
+    ticketNumber,
+    complainantId,
+    complainantRole,
+    targetType || 'RIDE',
+    authoritativeTargetUserId,
+    authoritativeBookingId,
+    category,
+    title.trim(),
+    description.trim(),
+    severity || 'MEDIUM'
+  ]);
+
+  const created = get<any>(`
+    SELECT 
+      c.*,
+      cu.name as complainant_name,
+      tu.name as target_user_name,
+      b.booking_number
+    FROM complaints c
+    JOIN users cu ON c.complainant_user_id = cu.id
+    LEFT JOIN users tu ON c.target_user_id = tu.id
+    LEFT JOIN bookings b ON c.booking_id = b.id
+    WHERE c.id = ?
+  `, [complaintId]);
+
+  res.status(201).json({
+    success: true,
+    complaint: created,
+    ticketNumber,
+    message: `Grievance ticket ${ticketNumber} registered successfully. Our safety & support team will review it.`
+  });
+});
+
+apiRouter.get('/complaints/my', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const userId = authReq.user.id;
+
+  const complaints = query<any>(`
+    SELECT 
+      c.*,
+      tu.name as target_user_name, tu.phone as target_user_phone,
+      b.booking_number,
+      ru.name as resolved_by_name
+    FROM complaints c
+    LEFT JOIN users tu ON c.target_user_id = tu.id
+    LEFT JOIN bookings b ON c.booking_id = b.id
+    LEFT JOIN users ru ON c.resolved_by = ru.id
+    WHERE c.complainant_user_id = ?
+    ORDER BY c.created_at DESC
+  `, [userId]);
+
+  res.json({ complaints });
+});
+
+apiRouter.get('/admin/complaints', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (req: Request, res: Response) => {
+  const { status, targetType, severity } = req.query;
+
+  let sql = `
+    SELECT 
+      c.*,
+      cu.name as complainant_name, cu.phone as complainant_phone, cu.email as complainant_email,
+      tu.name as target_user_name, tu.phone as target_user_phone, tu.role as target_user_role,
+      b.booking_number, b.fare_estimate, b.final_fare, b.pickup_address, b.destination_address,
+      ru.name as resolved_by_name
+    FROM complaints c
+    JOIN users cu ON c.complainant_user_id = cu.id
+    LEFT JOIN users tu ON c.target_user_id = tu.id
+    LEFT JOIN bookings b ON c.booking_id = b.id
+    LEFT JOIN users ru ON c.resolved_by = ru.id
+    WHERE 1=1
+  `;
+  const params: any[] = [];
+
+  if (status && status !== 'ALL') {
+    sql += ` AND c.status = ?`;
+    params.push(status);
+  }
+  if (targetType && targetType !== 'ALL') {
+    sql += ` AND c.target_type = ?`;
+    params.push(targetType);
+  }
+  if (severity && severity !== 'ALL') {
+    sql += ` AND c.severity = ?`;
+    params.push(severity);
+  }
+
+  sql += ` ORDER BY CASE c.severity WHEN 'CRITICAL' THEN 1 WHEN 'HIGH' THEN 2 WHEN 'MEDIUM' THEN 3 ELSE 4 END, c.created_at DESC`;
+
+  const complaints = query<any>(sql, params);
+  res.json({ complaints });
+});
+
+apiRouter.put('/admin/complaints/:id/resolve', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  const authReq = req as AuthenticatedRequest;
+  const adminId = authReq.user.id;
+
+  const { status, resolutionNotes, action, refundAmount } = req.body;
+
+  const complaint = get<any>('SELECT * FROM complaints WHERE id = ?', [id]);
+  if (!complaint) return res.status(404).json({ error: 'Complaint ticket not found' });
+
+  const resolvedStatus = status || 'RESOLVED';
+  const now = new Date().toISOString();
+
+  // If action is REFUND_WALLET and refund amount > 0, credit user's wallet
+  if (action === 'REFUND_WALLET' && refundAmount && Number(refundAmount) > 0) {
+    const refund = Number(refundAmount);
+    run(`UPDATE wallets SET balance = balance + ?, updated_at = datetime('now') WHERE user_id = ?`, [refund, complaint.complainant_user_id]);
+    run(`
+      INSERT INTO wallet_transactions (id, wallet_id, amount, type, reference_type, reference_id, description)
+      VALUES (?, (SELECT id FROM wallets WHERE user_id = ?), ?, 'CREDIT', 'GRIEVANCE_REFUND', ?, ?)
+    `, [`wtx_${uuidv4().substring(0, 8)}`, complaint.complainant_user_id, refund, id, `Refund credit for Grievance Ticket #${complaint.ticket_number}`]);
+  }
+
+  // If action is SUSPEND_DRIVER and target is driver
+  if (action === 'SUSPEND_DRIVER' && complaint.target_user_id) {
+    run(`UPDATE driver_profiles SET verification_status = 'SUSPENDED', availability_status = 'OFFLINE' WHERE user_id = ?`, [complaint.target_user_id]);
+  }
+
+  run(`
+    UPDATE complaints
+    SET status = ?, resolution_notes = ?, resolved_by = ?, resolved_at = ?, updated_at = ?
+    WHERE id = ?
+  `, [resolvedStatus, resolutionNotes || 'Investigated and resolved by support admin.', adminId, now, now, id]);
+
+  const updated = get<any>(`
+    SELECT 
+      c.*,
+      cu.name as complainant_name,
+      tu.name as target_user_name,
+      ru.name as resolved_by_name
+    FROM complaints c
+    JOIN users cu ON c.complainant_user_id = cu.id
+    LEFT JOIN users tu ON c.target_user_id = tu.id
+    LEFT JOIN users ru ON c.resolved_by = ru.id
+    WHERE c.id = ?
+  `, [id]);
+
+  res.json({ success: true, complaint: updated, message: `Ticket ${complaint.ticket_number} marked as ${resolvedStatus}.` });
+});
+
 // ==========================================
 // 7. VOICE BOOKING ENGINE
 // ==========================================

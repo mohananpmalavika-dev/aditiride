@@ -4,6 +4,7 @@ import { api } from '../../services/api.js';
 import { t } from '../../i18n/translations.js';
 import { OpenStreetMap } from '../common/OpenStreetMap.js';
 import { VoiceBookingModal } from './VoiceBookingModal.js';
+import { ComplaintCenterModal } from '../common/ComplaintCenterModal.js';
 import {
   Search,
   Mic,
@@ -25,7 +26,8 @@ import {
   ArrowUpDown,
   X,
   CheckCircle2,
-  MousePointerClick
+  MousePointerClick,
+  ShieldAlert
 } from 'lucide-react';
 
 interface PassengerHomeProps {
@@ -84,6 +86,7 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
 
   // Modals & Submitting
   const [showVoiceModal, setShowVoiceModal] = useState(false);
+  const [showComplaintModal, setShowComplaintModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Locate Current GPS Location
@@ -339,13 +342,25 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
                 </h2>
               </div>
               
-              <button
-                onClick={() => setShowVoiceModal(true)}
-                className="flex items-center space-x-2 px-3.5 py-2 bg-gradient-to-tr from-brand-600 to-emerald-500 hover:from-brand-500 hover:to-emerald-400 text-white rounded-2xl text-xs font-bold shadow-md shadow-brand-500/20 transition-all hover:scale-105 active:scale-95"
-              >
-                <Mic className="w-4 h-4 animate-pulse" />
-                <span>{t('voice_booking', language)}</span>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowComplaintModal(true)}
+                  className="flex items-center space-x-1.5 px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 rounded-2xl text-xs font-bold text-rose-300 transition-colors"
+                  title="File a grievance or check ticket status"
+                >
+                  <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Help & Grievances</span>
+                </button>
+
+                <button
+                  onClick={() => setShowVoiceModal(true)}
+                  className="flex items-center space-x-2 px-3.5 py-2 bg-gradient-to-tr from-brand-600 to-emerald-500 hover:from-brand-500 hover:to-emerald-400 text-white rounded-2xl text-xs font-bold shadow-md shadow-brand-500/20 transition-all hover:scale-105 active:scale-95"
+                >
+                  <Mic className="w-4 h-4 animate-pulse" />
+                  <span>{t('voice_booking', language)}</span>
+                </button>
+              </div>
             </div>
 
             {/* DUAL LOCATION INPUTS: PICKUP & DESTINATION */}
@@ -889,6 +904,13 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
         currentLat={pickupCoords.lat}
         currentLng={pickupCoords.lng}
         onConfirmBooking={handleVoiceBookingConfirm}
+      />
+
+      {/* Grievance & Complaints Modal */}
+      <ComplaintCenterModal
+        isOpen={showComplaintModal}
+        onClose={() => setShowComplaintModal(false)}
+        currentUser={currentUser}
       />
     </div>
   );

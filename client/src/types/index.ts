@@ -153,3 +153,43 @@ export interface MatchedDriver {
   driverTotalFare?: number;
   tripFare?: number;
 }
+
+export type ComplaintTargetType = 'DRIVER' | 'PASSENGER' | 'RIDE' | 'FARE' | 'SAFETY' | 'APP';
+export type ComplaintSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type ComplaintStatus = 'OPEN' | 'UNDER_REVIEW' | 'RESOLVED' | 'REJECTED';
+
+export interface Complaint {
+  id: string;
+  ticket_number: string;
+  complainant_user_id: string;
+  complainant_role: string;
+  target_type: ComplaintTargetType;
+  target_user_id?: string;
+  target_user_name?: string;
+  target_user_phone?: string;
+  booking_id?: string;
+  booking_number?: string;
+  category: string;
+  title: string;
+  description: string;
+  severity: ComplaintSeverity;
+  status: ComplaintStatus;
+  resolution_notes?: string;
+  resolved_by?: string;
+  resolved_by_name?: string;
+  resolved_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RatingReview {
+  id: string;
+  booking_id: string;
+  rater_id: string;
+  rated_user_id: string;
+  rating: number;
+  tags: string[];
+  comment?: string;
+  is_safety_report: boolean;
+  created_at: string;
+}
