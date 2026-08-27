@@ -1,5 +1,5 @@
 import { query, get, run } from '../db/index.js';
-import { Booking, BookingStatus, DriverProfile, VehicleCategory, UserRole } from '../types/index.js';
+import { Booking, BookingStatus, DriverProfile, VehicleCategory, User } from '../types/index.js';
 import { FareEngine } from './FareEngine.js';
 
 export class BookingStateMachine {
@@ -30,7 +30,7 @@ export class BookingStateMachine {
   }
 
   /**
-   * Transition booking state with strict validations & side-effects
+   * Transition booking state with strict role verification, participant checks, and authoritative final calculations
    */
   public static transition(
     bookingId: string,
@@ -39,32 +39,73 @@ export class BookingStateMachine {
     metadata: {
       otp?: string;
       cancellationReason?: string;
-      driverId?: string;
       finalDistanceKm?: number;
       finalDurationMin?: number;
     } = {}
   ): Booking {
     const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [bookingId]);
     if (!booking) {
-      throw new Error(`Booking ${bookingId} not found`);
+      throw new Error(`Booking '${bookingId}' not found.`);
     }
 
     if (!this.canTransition(booking.status, newStatus)) {
       throw new Error(
-        `Illegal state transition: Cannot change booking status from '${booking.status}' to '${newStatus}'`
+        `Illegal state transition: Cannot change booking status from '${booking.status}' to '${newStatus}'.`
       );
+    }
+
+    const actor = get<User>('SELECT * FROM users WHERE id = ?', [triggeredByUserId]);
+    if (!actor) {
+      throw new Error(`Acting user '${triggeredByUserId}' not found.`);
+    }
+
+    const driverProfile = booking.driver_id
+      ? get<DriverProfile>('SELECT * FROM driver_profiles WHERE id = ?', [booking.driver_id])
+      : null;
+
+    const isPassenger = booking.passenger_id === triggeredByUserId;
+    const isAssignedDriver = driverProfile ? driverProfile.user_id === triggeredByUserId : false;
+    const isAdmin = actor.role === 'SUPER_ADMIN' || actor.role === 'ADMIN';
+
+    // 1. Strict Role & Participant Guardrails
+    const driverActions: BookingStatus[] = [
+      'DRIVER_ACCEPTED',
+      'DRIVER_EN_ROUTE',
+      'DRIVER_ARRIVED',
+      'TRIP_STARTED',
+      'TRIP_IN_PROGRESS',
+      'COMPLETED'
+    ];
+
+    if (driverActions.includes(newStatus)) {
+      if (actor.role !== 'DRIVER' && !isAdmin) {
+        throw new Error(`Access forbidden: Only a verified driver or admin can transition booking to '${newStatus}'.`);
+      }
+
+      // If already assigned to a specific driver, ensure it's that driver
+      if (booking.driver_id && !isAssignedDriver && !isAdmin) {
+        throw new Error('Access forbidden: You are not the assigned driver for this booking.');
+      }
+    }
+
+    if (newStatus === 'CANCELLED_BY_PASSENGER' && !isPassenger && !isAdmin) {
+      throw new Error('Access forbidden: Only the passenger can cancel this ride.');
+    }
+
+    if (newStatus === 'CANCELLED_BY_DRIVER' && !isAssignedDriver && !isAdmin) {
+      throw new Error('Access forbidden: Only the assigned driver can cancel this ride.');
     }
 
     const now = new Date().toISOString();
 
-    // Verification for starting trip: OTP Check
+    // 2. Verification for Starting Trip: Mandatory 4-digit OTP
     if (newStatus === 'TRIP_STARTED') {
       if (!metadata.otp || metadata.otp.trim() !== booking.otp_code.trim()) {
-        throw new Error('Invalid passenger OTP. Please ask the passenger for the correct 4-digit OTP shown on their screen.');
+        throw new Error('Invalid passenger OTP. Please enter the correct 4-digit OTP shown on the passenger screen.');
       }
     }
 
-    // Cancellation fee logic
+    // 3. Cancellation Fee Logic
     let cancellationFee = 0.0;
     if (newStatus === 'CANCELLED_BY_PASSENGER') {
       const category = get<VehicleCategory>('SELECT * FROM vehicle_categories WHERE id = ?', [booking.vehicle_category_id]);
@@ -73,27 +114,31 @@ export class BookingStateMachine {
       }
     }
 
-    // Update fields according to state
-    if (newStatus === 'DRIVER_ASSIGNED' || newStatus === 'DRIVER_ACCEPTED') {
-      const driverId = metadata.driverId || booking.driver_id;
-      if (driverId) {
-        // Concurrency check: Ensure driver is not already ON_TRIP
-        const driver = get<DriverProfile>('SELECT * FROM driver_profiles WHERE id = ?', [driverId]);
-        if (driver && driver.availability_status === 'ON_TRIP') {
+    // 4. Driver Acceptance & State Changes
+    if (newStatus === 'DRIVER_ACCEPTED') {
+      let authoritativeDriverId = booking.driver_id;
+      if (!authoritativeDriverId && actor.role === 'DRIVER') {
+        const actorProfile = get<DriverProfile>('SELECT id, availability_status FROM driver_profiles WHERE user_id = ?', [actor.id]);
+        if (!actorProfile) throw new Error('Driver profile not found.');
+        if (actorProfile.availability_status === 'ON_TRIP') {
           throw new Error('Driver is currently on another active trip.');
         }
+        authoritativeDriverId = actorProfile.id;
+      }
 
-        run(
-          `UPDATE bookings SET driver_id = ?, status = ?, accepted_at = COALESCE(accepted_at, ?) WHERE id = ?`,
-          [driverId, newStatus, now, bookingId]
-        );
-        run(`UPDATE driver_profiles SET availability_status = 'ON_TRIP' WHERE id = ?`, [driverId]);
+      run(
+        `UPDATE bookings SET driver_id = ?, status = ?, accepted_at = COALESCE(accepted_at, ?) WHERE id = ?`,
+        [authoritativeDriverId, newStatus, now, bookingId]
+      );
+      if (authoritativeDriverId) {
+        run(`UPDATE driver_profiles SET availability_status = 'ON_TRIP' WHERE id = ?`, [authoritativeDriverId]);
       }
     } else if (newStatus === 'DRIVER_ARRIVED') {
       run(`UPDATE bookings SET status = ?, arrived_at = ? WHERE id = ?`, [newStatus, now, bookingId]);
     } else if (newStatus === 'TRIP_STARTED') {
       run(`UPDATE bookings SET status = ?, started_at = ? WHERE id = ?`, [newStatus, now, bookingId]);
     } else if (newStatus === 'COMPLETED') {
+      // Authoritative final fare calculation based on real distance & duration
       const actualDistance = metadata.finalDistanceKm || booking.distance_km || 4.5;
       const actualDuration = metadata.finalDurationMin || booking.duration_min || 15;
 
@@ -118,7 +163,6 @@ export class BookingStateMachine {
       );
 
       if (booking.driver_id) {
-        // Free driver back to ONLINE
         run(`UPDATE driver_profiles SET availability_status = 'ONLINE', total_trips = total_trips + 1 WHERE id = ?`, [booking.driver_id]);
       }
     } else if (newStatus === 'CANCELLED_BY_PASSENGER' || newStatus === 'CANCELLED_BY_DRIVER') {
@@ -134,7 +178,6 @@ export class BookingStateMachine {
       run(`UPDATE bookings SET status = ? WHERE id = ?`, [newStatus, bookingId]);
     }
 
-    // Fetch updated snapshot
     const updated = get<Booking>(`
       SELECT 
         b.*,

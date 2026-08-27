@@ -182,8 +182,12 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
     socket.on('call_declined', handleCallDeclined);
     socket.on('call_ended', handleCallEnded);
 
-    // Fallback polling interval
-    const interval = setInterval(loadBookingData, 4000);
+    // Fallback polling only when socket is disconnected
+    const interval = setInterval(() => {
+      if (!socket.connected) {
+        loadBookingData();
+      }
+    }, 10000);
 
     return () => {
       clearInterval(interval);

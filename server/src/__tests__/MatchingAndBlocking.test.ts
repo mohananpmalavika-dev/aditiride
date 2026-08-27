@@ -5,6 +5,8 @@ import { MatchingEngine } from '../services/MatchingEngine.js';
 describe('Matching Engine & Two-Way Blocking Tests', () => {
   beforeAll(async () => {
     await getDb();
+    run("DELETE FROM user_blocks WHERE id LIKE 'blk_test_%' OR id LIKE 'blk_sec_%'");
+    run("UPDATE driver_profiles SET availability_status = 'ONLINE'");
   });
 
   it('finds and ranks nearby online verified drivers', () => {
@@ -23,6 +25,10 @@ describe('Matching Engine & Two-Way Blocking Tests', () => {
   });
 
   it('prioritizes favorite drivers in composite ranking score', () => {
+    run("UPDATE driver_profiles SET availability_status = 'ONLINE' WHERE id = 'drv_rahul'");
+    run("INSERT OR IGNORE INTO favorites (id, passenger_id, driver_id, status) VALUES ('fav_rahul_test', 'usr_passenger', 'drv_rahul', 'ACTIVE')");
+    run("UPDATE favorites SET status = 'ACTIVE' WHERE passenger_id = 'usr_passenger' AND driver_id = 'drv_rahul'");
+
     // Rahul is favorite driver for Sedan
     const drivers = MatchingEngine.findNearbyDrivers(
       'usr_passenger',

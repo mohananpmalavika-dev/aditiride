@@ -209,25 +209,49 @@ export class VoiceEngine {
     entities.destination = destinationLocation.name;
     entities.destinationLocation = destinationLocation;
 
-    // Default Pickup to Current Location
-    const pickupAddress = LocationService.reverseGeocodeSync(currentLat, currentLng);
-    entities.pickup = pickupAddress;
-    entities.pickupLocation = {
-      id: 'loc_pickup_curr',
-      name: 'Current Location',
-      address: pickupAddress,
-      lat: currentLat,
-      lng: currentLng,
-      type: 'LANDMARK'
-    };
+    // 5. Pickup Location Safety Resolution
+    const hasValidCoordinates = currentLat && currentLng && !isNaN(currentLat) && !isNaN(currentLng) && (currentLat !== 0 || currentLng !== 0);
+    
+    let pickupAddress = '';
+    let isLocationMissing = false;
 
-    // 5. Extract Favorite Driver Intent
+    if (hasValidCoordinates) {
+      pickupAddress = LocationService.reverseGeocodeSync(currentLat, currentLng);
+      entities.pickup = pickupAddress;
+      entities.pickupLocation = {
+        id: 'loc_pickup_curr',
+        name: 'Current Location',
+        address: pickupAddress,
+        lat: currentLat,
+        lng: currentLng,
+        type: 'LANDMARK' as const
+      };
+    } else {
+      isLocationMissing = true;
+      entities.pickup = 'Location Not Provided';
+    }
+
+    // 6. Calculate Route and authoritatively estimate fare
+    const route = hasValidCoordinates ? LocationService.calculateRouteSync(
+      { lat: currentLat, lng: currentLng },
+      { lat: destinationLocation.lat, lng: destinationLocation.lng }
+    ) : { distanceKm: 4.5, durationMin: 15 };
+
+    const quote = FareEngine.calculateFare({
+      vehicleCategoryId: entities.vehicleCategoryId || 'cat_auto',
+      distanceKm: route.distanceKm,
+      durationMin: route.durationMin,
+      pickupLat: hasValidCoordinates ? currentLat : undefined,
+      pickupLng: hasValidCoordinates ? currentLng : undefined
+    });
+
+    // 7. Extract Favorite Driver Intent
     if (lower.includes('favorite') || lower.includes('rahul') || raw.includes('പ്രിയപ്പെട്ട') || raw.includes('രാഹുൽ')) {
       entities.driverPreference = 'FAVORITE';
       entities.specificDriverName = 'Rahul Nair';
     }
 
-    // 6. Extract Payment Preference
+    // 8. Extract Payment Preference
     if (lower.includes('cash') || raw.includes('പണം') || raw.includes('ക്യാഷ്') || raw.includes('नकद')) {
       entities.paymentMethod = 'CASH';
     } else if (lower.includes('wallet') || raw.includes('വാലറ്റ്')) {
@@ -236,32 +260,26 @@ export class VoiceEngine {
       entities.paymentMethod = 'UPI';
     }
 
-    // 7. Calculate Fare Quote Preview
-    const route = LocationService.calculateRouteSync(
-      { lat: currentLat, lng: currentLng },
-      { lat: destinationLocation.lat, lng: destinationLocation.lng }
-    );
-
-    const quote = FareEngine.calculateFare({
-      vehicleCategoryId: entities.vehicleCategoryId || 'cat_auto',
-      distanceKm: route.distanceKm,
-      durationMin: route.durationMin,
-      pickupLat: currentLat,
-      pickupLng: currentLng
-    });
-
-    // 8. Generate Multi-lingual Spoken Confirmation Text
+    // 9. Generate Multi-lingual Spoken Confirmation Text
     let spokenPrompt = '';
-    if (detectedLang === 'ml') {
-      const timeStr = entities.isScheduled ? 'നാളെ ' : '';
-      spokenPrompt = `${timeStr}${destinationLocation.name}-ലേക്ക് ${entities.vehicleCategoryName}. ഏകദേശ നിരക്ക് ₹${quote.total_fare}. ബുക്ക് ചെയ്യാൻ "Confirm" എന്ന് പറയുക.`;
+    if (isLocationMissing) {
+      if (detectedLang === 'ml') {
+        spokenPrompt = 'എവിടെ നിന്നാണ് പിക്കപ്പ് ചെയ്യേണ്ടത്? ദയവായി നിങ്ങളുടെ ലൊക്കേഷൻ പറയുക.';
+      } else if (detectedLang === 'hi') {
+        spokenPrompt = 'आपको कहाँ से पिकअप करना है? कृपया पिकअप स्थान बताएं।';
+      } else if (detectedLang === 'ta') {
+        spokenPrompt = 'எங்கிருந்து பிக்கப் செய்ய வேண்டும்? தயவுசெய்து உங்கள் இடத்தை கூறவும்.';
+      } else {
+        spokenPrompt = 'Where should I pick you up? Please specify your pickup location.';
+      }
+    } else if (detectedLang === 'ml') {
+      spokenPrompt = `${entities.destination}-ലേക്ക് ${entities.vehicleCategoryName} നിരക്ക് ₹${quote.total_fare} വരും. ബുക്ക് ചെയ്യാൻ Confirm എന്ന് പറയുക.`;
     } else if (detectedLang === 'hi') {
-      spokenPrompt = `${destinationLocation.name} के लिए ${entities.vehicleCategoryName}। अनुमानित किराया ₹${quote.total_fare}। बुक करने के लिए "Confirm" कहें।`;
+      spokenPrompt = `${entities.destination} के लिए ${entities.vehicleCategoryName} का किराया ₹${quote.total_fare} होगा। बुक करने के लिए Confirm कहें।`;
     } else if (detectedLang === 'ta') {
-      spokenPrompt = `${destinationLocation.name}-க்கு ${entities.vehicleCategoryName}। உத்தேச கட்டணம் ₹${quote.total_fare}। உறுதிப்படுத்த "Confirm" சொல்லுங்கள்.`;
+      spokenPrompt = `${entities.destination}-க்கு ${entities.vehicleCategoryName} கட்டணம் ₹${quote.total_fare}. புக் செய்ய Confirm என்று சொல்லுங்கள்.`;
     } else {
-      const schedulePrefix = entities.isScheduled ? 'Scheduled for tomorrow: ' : '';
-      spokenPrompt = `${schedulePrefix}${entities.vehicleCategoryName} to ${destinationLocation.name}. Estimated fare is ₹${quote.total_fare} (approx. ${route.durationMin} mins, ${route.distanceKm} km). Say "Confirm" to book.`;
+      spokenPrompt = `${entities.vehicleCategoryName} to ${entities.destination} will cost ₹${quote.total_fare}. Say Confirm to place booking.`;
     }
 
     return {
@@ -275,7 +293,7 @@ export class VoiceEngine {
         distanceKm: route.distanceKm,
         durationMin: route.durationMin,
         spokenPrompt,
-        actionRequired: 'CONFIRM_TO_BOOK'
+        actionRequired: isLocationMissing ? 'ASK_DESTINATION' : 'CONFIRM_TO_BOOK'
       }
     };
   }

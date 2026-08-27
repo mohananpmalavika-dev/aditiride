@@ -5,6 +5,7 @@ import { SafetyService } from '../services/SafetyService.js';
 import { BookingStateMachine } from '../services/BookingStateMachine.js';
 import { FareEngine } from '../services/FareEngine.js';
 import { PaymentService } from '../services/PaymentService.js';
+import { VoiceEngine } from '../services/VoiceEngine.js';
 
 describe('P0 Security & Authorization Hardening Tests', () => {
   beforeAll(async () => {
@@ -50,12 +51,12 @@ describe('P0 Security & Authorization Hardening Tests', () => {
     it('should enforce that favorite drivers are strictly bound to authenticated user', () => {
       const realUserA = 'usr_passenger';
       const fakeVictimB = 'usr_victim_user_id';
-      const driverId = 'drv_rahul';
+      const driverId = 'drv_priya';
 
       // Ensure clean state
-      run(`DELETE FROM favorites WHERE driver_id = ?`, [driverId]);
+      run(`DELETE FROM favorites WHERE id = 'fav_test_1'`);
 
-      // Server should record favorite for realUserA
+      // Server records favorite for realUserA
       run(`INSERT INTO favorites (id, passenger_id, driver_id, status) VALUES ('fav_test_1', ?, ?, 'ACTIVE')`, [
         realUserA,
         driverId
@@ -64,9 +65,11 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       const victimFavorites = query(`SELECT * FROM favorites WHERE passenger_id = ? AND status = 'ACTIVE'`, [fakeVictimB]);
       expect(victimFavorites.length).toBe(0);
 
-      const userAFavorites = query(`SELECT * FROM favorites WHERE passenger_id = ? AND status = 'ACTIVE'`, [realUserA]);
+      const userAFavorites = query(`SELECT * FROM favorites WHERE passenger_id = ? AND id = 'fav_test_1' AND status = 'ACTIVE'`, [realUserA]);
       expect(userAFavorites.length).toBe(1);
       expect(userAFavorites[0].driver_id).toBe(driverId);
+
+      run(`DELETE FROM favorites WHERE id = 'fav_test_1'`);
     });
 
     it('should enforce blocker identity derivation in bilateral blocking', () => {
@@ -84,6 +87,8 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       expect(blocks.length).toBe(1);
       expect(blocks[0].blocked_user_id).toBe(blockedDriver);
       expect(blocks[0].blocker_user_id).toBe(blockerId);
+
+      run(`DELETE FROM user_blocks WHERE id = 'blk_sec_1'`);
     });
   });
 
@@ -105,7 +110,7 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       `, [bookingId]);
 
       // Complete trip with actual final distance 8.5 km and duration 25 min
-      const completed = BookingStateMachine.transition(bookingId, 'COMPLETED', 'drv_rahul', {
+      const completed = BookingStateMachine.transition(bookingId, 'COMPLETED', 'usr_driver_rahul', {
         finalDistanceKm: 8.5,
         finalDurationMin: 25
       });
@@ -184,9 +189,65 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       const share = SafetyService.generateLiveShareToken(bookingId);
 
       expect(share.token.startsWith('share_')).toBe(true);
-      // 32 bytes hex = 64 hex characters + 'share_' prefix = 70 chars
       expect(share.token.length).toBeGreaterThanOrEqual(64);
       expect(share.shareUrl).toBe(`/track/live/${share.token}`);
+    });
+  });
+
+  describe('5. Booking State Transition Authorization & Tamper Resistance', () => {
+    it('should prevent a passenger from fraudulently marking a trip as COMPLETED', () => {
+      const bookingId = 'bk_sec_transition_test';
+      run(`
+        INSERT OR REPLACE INTO bookings (
+          id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+          pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+          distance_km, duration_min, otp_code, fare_estimate, fare_source, fare_rule_version,
+          surge_multiplier, payment_method, payment_status, status
+        ) VALUES (
+          ?, 'ADITI-TRANS-001', 'usr_passenger', 'drv_rahul', 'cat_sedan', 'INSTANT',
+          10.5276, 76.2144, 'A', 10.5360, 76.2220, 'B',
+          5.0, 15, '5821', 150.0, 'ESTIMATE', 'v2.0',
+          1.0, 'UPI', 'PENDING', 'TRIP_STARTED'
+        )
+      `, [bookingId]);
+
+      // Passenger tries to complete the trip
+      expect(() => {
+        BookingStateMachine.transition(bookingId, 'COMPLETED', 'usr_passenger');
+      }).toThrow(/Access forbidden: Only a verified driver or admin can transition/);
+    });
+
+    it('should prevent Driver B from completing or modifying Driver A assigned ride', () => {
+      const bookingId = 'bk_sec_driver_mismatch';
+      run(`
+        INSERT OR REPLACE INTO bookings (
+          id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+          pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+          distance_km, duration_min, otp_code, fare_estimate, fare_source, fare_rule_version,
+          surge_multiplier, payment_method, payment_status, status
+        ) VALUES (
+          ?, 'ADITI-TRANS-002', 'usr_passenger', 'drv_rahul', 'cat_sedan', 'INSTANT',
+          10.5276, 76.2144, 'A', 10.5360, 76.2220, 'B',
+          5.0, 15, '5821', 150.0, 'ESTIMATE', 'v2.0',
+          1.0, 'UPI', 'PENDING', 'TRIP_STARTED'
+        )
+      `, [bookingId]);
+
+      // Driver Arun attempts to complete Rahul's ride
+      expect(() => {
+        BookingStateMachine.transition(bookingId, 'COMPLETED', 'usr_driver_arun');
+      }).toThrow(/Access forbidden: You are not the assigned driver/);
+    });
+  });
+
+  describe('6. Voice Engine Missing Location Safety', () => {
+    it('should prompt user for pickup location instead of silently assuming default coordinates when GPS is unavailable', () => {
+      // User says "Book a sedan" without GPS coordinates or explicit pickup location
+      const result = VoiceEngine.parseUtterance('Book a sedan to Lulu Mall', 0, 0, 'en');
+
+      expect(result.preview?.actionRequired).toBe('ASK_DESTINATION');
+      expect(result.preview?.spokenPrompt).toContain('Where should I pick you up?');
+      expect(result.entities.pickup).toBe('Location Not Provided');
     });
   });
 });

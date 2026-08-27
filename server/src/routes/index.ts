@@ -549,14 +549,13 @@ apiRouter.get('/bookings/:id', authenticateToken, (req: Request, res: Response) 
 apiRouter.post('/bookings/:id/transition', authenticateToken, (req: Request, res: Response) => {
   const { id } = req.params;
   const authReq = req as AuthenticatedRequest;
-  const { nextStatus, status, otp, cancellationReason, driverId, finalDistanceKm, finalDurationMin } = req.body;
+  const { nextStatus, status, otp, cancellationReason, finalDistanceKm, finalDurationMin } = req.body;
   const targetStatus = nextStatus || status;
 
   try {
     const updated = BookingStateMachine.transition(id, targetStatus, authReq.user.id, {
       otp,
       cancellationReason,
-      driverId,
       finalDistanceKm,
       finalDurationMin
     });
@@ -575,22 +574,57 @@ apiRouter.post('/bookings/:id/transition', authenticateToken, (req: Request, res
 apiRouter.post('/bookings/:id/rate', authenticateToken, (req: Request, res: Response) => {
   const { id } = req.params;
   const authReq = req as AuthenticatedRequest;
-  const { ratedUserId, rating, tags, comment, isSafetyReport } = req.body;
+  const { rating, tags, comment, isSafetyReport } = req.body;
+
+  const numRating = parseFloat(rating);
+  if (isNaN(numRating) || numRating < 1 || numRating > 5) {
+    return res.status(400).json({ error: 'Rating must be an integer or decimal between 1 and 5 stars.' });
+  }
+
+  const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [id]);
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+
+  if (booking.status !== 'COMPLETED') {
+    return res.status(400).json({ error: 'Cannot rate an active or uncompleted ride. Rating is only permitted once the trip is completed.' });
+  }
+
+  const driverProfile = booking.driver_id
+    ? get<{ user_id: string }>('SELECT user_id FROM driver_profiles WHERE id = ?', [booking.driver_id])
+    : null;
+
+  const isPassenger = booking.passenger_id === authReq.user.id;
+  const isDriver = driverProfile?.user_id === authReq.user.id;
+
+  if (!isPassenger && !isDriver) {
+    return res.status(403).json({ error: 'Access forbidden: Only verified ride participants can rate this trip.' });
+  }
+
+  // Server authoritatively derives the counterpart being rated
+  const authoritativeRatedUserId = isPassenger ? driverProfile?.user_id : booking.passenger_id;
+  if (!authoritativeRatedUserId) {
+    return res.status(400).json({ error: 'No counterpart user found to rate for this trip.' });
+  }
+
+  // Check for duplicate rating by the same user
+  const existingRating = get('SELECT id FROM ratings WHERE booking_id = ? AND rater_id = ?', [id, authReq.user.id]);
+  if (existingRating) {
+    return res.status(409).json({ error: 'You have already submitted a rating for this trip.' });
+  }
 
   const ratingId = `rat_${uuidv4().substring(0, 8)}`;
   run(`
     INSERT INTO ratings (id, booking_id, rater_id, rated_user_id, rating, tags, comment, is_safety_report)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `, [ratingId, id, authReq.user.id, ratedUserId, rating, JSON.stringify(tags || []), comment || null, isSafetyReport ? 1 : 0]);
+  `, [ratingId, id, authReq.user.id, authoritativeRatedUserId, numRating, JSON.stringify(tags || []), comment || null, isSafetyReport ? 1 : 0]);
 
-  const avgData = get<{ avg: number }>(`SELECT AVG(rating) as avg FROM ratings WHERE rated_user_id = ?`, [ratedUserId]);
+  const avgData = get<{ avg: number }>(`SELECT AVG(rating) as avg FROM ratings WHERE rated_user_id = ?`, [authoritativeRatedUserId]);
   if (avgData && avgData.avg) {
     const rounded = Math.round(avgData.avg * 100) / 100;
-    run(`UPDATE driver_profiles SET rating_avg = ? WHERE user_id = ?`, [rounded, ratedUserId]);
-    run(`UPDATE passenger_profiles SET rating_avg = ? WHERE user_id = ?`, [rounded, ratedUserId]);
+    run(`UPDATE driver_profiles SET rating_avg = ? WHERE user_id = ?`, [rounded, authoritativeRatedUserId]);
+    run(`UPDATE passenger_profiles SET rating_avg = ? WHERE user_id = ?`, [rounded, authoritativeRatedUserId]);
   }
 
-  res.json({ success: true, ratingId });
+  res.json({ success: true, ratingId, message: 'Rating submitted successfully' });
 });
 
 // ==========================================
