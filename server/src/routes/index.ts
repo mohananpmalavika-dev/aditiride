@@ -639,10 +639,13 @@ apiRouter.delete('/blocks/:userId', (req: Request, res: Response) => {
 // ==========================================
 apiRouter.get('/scheduled-rides', (req: Request, res: Response) => {
   const passengerId = (req.query.passengerId as string) || 'usr_passenger';
-  const scheduled = query<ScheduledBooking>(`
-    SELECT s.*, vc.name as vehicle_category_name
+  const scheduled = query<any>(`
+    SELECT s.*, vc.name as vehicle_category_name, vc.display_name as vehicle_category_display, vc.code as vehicle_category_code,
+           d.rating_avg as driver_rating, u.name as driver_name, u.avatar_url as driver_avatar
     FROM scheduled_bookings s
     JOIN vehicle_categories vc ON s.vehicle_category_id = vc.id
+    LEFT JOIN driver_profiles d ON s.specific_driver_id = d.id
+    LEFT JOIN users u ON d.user_id = u.id
     WHERE s.passenger_id = ? AND s.status != 'CANCELLED'
     ORDER BY s.scheduled_time ASC
   `, [passengerId]);
@@ -650,7 +653,7 @@ apiRouter.get('/scheduled-rides', (req: Request, res: Response) => {
   res.json({ scheduled });
 });
 
-apiRouter.post('/scheduled-rides', (req: Request, res: Response) => {
+apiRouter.post('/scheduled-rides', async (req: Request, res: Response) => {
   const {
     passengerId,
     pickupLat,
@@ -664,8 +667,31 @@ apiRouter.post('/scheduled-rides', (req: Request, res: Response) => {
     driverPreference,
     specificDriverId,
     recurrenceRule,
+    recurringDays,
+    recurringTime,
     flightOrTrainNumber
   } = req.body;
+
+  if (!passengerId || !pickupAddress || !destinationAddress || !scheduledTime) {
+    return res.status(400).json({ error: 'Passenger, Pickup, Destination and Scheduled Time are required' });
+  }
+
+  const pLat = parseFloat(pickupLat) || 10.5276;
+  const pLng = parseFloat(pickupLng) || 76.2144;
+  const dLat = parseFloat(destinationLat) || 10.5360;
+  const dLng = parseFloat(destinationLng) || 76.2220;
+  const catId = vehicleCategoryId || 'cat_sedan';
+
+  // Calculate real route and fare estimate
+  const route = await LocationService.calculateRoute({ lat: pLat, lng: pLng }, { lat: dLat, lng: dLng });
+  const quote = FareEngine.calculateFare({
+    vehicleCategoryId: catId,
+    distanceKm: route.distanceKm,
+    durationMin: route.durationMin,
+    pickupLat: pLat,
+    pickupLng: pLng,
+    driverId: specificDriverId
+  });
 
   const id = `sched_${uuidv4().substring(0, 8)}`;
   run(`
@@ -675,13 +701,97 @@ apiRouter.post('/scheduled-rides', (req: Request, res: Response) => {
       scheduled_time, recurrence_rule, flight_or_train_number, status
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
   `, [
-    id, passengerId, driverPreference || 'ANY', specificDriverId || null, vehicleCategoryId || 'cat_sedan',
-    pickupLat, pickupLng, pickupAddress, destinationLat, destinationLng, destinationAddress,
-    scheduledTime, recurrenceRule || null, flightOrTrainNumber || null
+    id, passengerId, driverPreference || 'ANY', specificDriverId || null, catId,
+    pLat, pLng, pickupAddress, dLat, dLng, destinationAddress,
+    scheduledTime, recurrenceRule || 'NONE', flightOrTrainNumber || null
   ]);
 
-  const created = get<ScheduledBooking>('SELECT * FROM scheduled_bookings WHERE id = ?', [id]);
-  res.status(201).json({ scheduled: created });
+  const created = get<any>(`
+    SELECT s.*, vc.name as vehicle_category_name, vc.display_name as vehicle_category_display, vc.code as vehicle_category_code
+    FROM scheduled_bookings s
+    JOIN vehicle_categories vc ON s.vehicle_category_id = vc.id
+    WHERE s.id = ?
+  `, [id]);
+
+  res.status(201).json({
+    scheduled: {
+      ...created,
+      estimated_fare: quote.total_fare,
+      distance_km: route.distanceKm,
+      duration_min: route.durationMin
+    }
+  });
+});
+
+apiRouter.post('/scheduled-rides/:id/cancel', (req: Request, res: Response) => {
+  const { id } = req.params;
+  run(`UPDATE scheduled_bookings SET status = 'CANCELLED' WHERE id = ?`, [id]);
+  res.json({ success: true, message: 'Scheduled ride cancelled successfully' });
+});
+
+apiRouter.post('/scheduled-rides/:id/dispatch-now', async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const sched = get<any>('SELECT * FROM scheduled_bookings WHERE id = ?', [id]);
+  if (!sched) return res.status(404).json({ error: 'Scheduled ride not found' });
+
+  // Convert into live active booking
+  const route = await LocationService.calculateRoute(
+    { lat: sched.pickup_lat, lng: sched.pickup_lng },
+    { lat: sched.destination_lat, lng: sched.destination_lng }
+  );
+
+  const quote = FareEngine.calculateFare({
+    vehicleCategoryId: sched.vehicle_category_id,
+    distanceKm: route.distanceKm,
+    durationMin: route.durationMin,
+    pickupLat: sched.pickup_lat,
+    pickupLng: sched.pickup_lng,
+    driverId: sched.specific_driver_id
+  });
+
+  const bookingId = `bk_${uuidv4().substring(0, 8)}`;
+  const bookingNumber = `ADITI-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const otpCode = SafetyService.generateTripOtp();
+
+  const nearbyDrivers = MatchingEngine.findNearbyDrivers(
+    sched.passenger_id,
+    sched.pickup_lat,
+    sched.pickup_lng,
+    sched.vehicle_category_id,
+    10.0,
+    sched.specific_driver_id
+  );
+
+  let candidateDriverId: string | null = null;
+  let initialStatus = 'SEARCHING';
+  if (nearbyDrivers.length > 0) {
+    candidateDriverId = nearbyDrivers[0].driverId;
+    initialStatus = 'DRIVER_ASSIGNED';
+  }
+
+  run(`
+    INSERT INTO bookings (
+      id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+      pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+      scheduled_at, distance_km, duration_min, otp_code, fare_estimate, fare_source,
+      fare_rule_version, surge_multiplier, payment_method, payment_status, status
+    ) VALUES (
+      ?, ?, ?, ?, ?, 'SCHEDULED',
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, 'UPI', 'PENDING', ?
+    )
+  `, [
+    bookingId, bookingNumber, sched.passenger_id, candidateDriverId, sched.vehicle_category_id,
+    sched.pickup_lat, sched.pickup_lng, sched.pickup_address, sched.destination_lat, sched.destination_lng, sched.destination_address,
+    sched.scheduled_time, route.distanceKm, route.durationMin, otpCode, quote.total_fare, quote.fare_source,
+    quote.fare_rule_version, quote.surge_multiplier, initialStatus
+  ]);
+
+  run(`UPDATE scheduled_bookings SET status = 'DISPATCHED' WHERE id = ?`, [id]);
+
+  const booking = get('SELECT * FROM bookings WHERE id = ?', [bookingId]);
+  res.json({ success: true, booking, message: 'Scheduled ride dispatched live!' });
 });
 
 // ==========================================

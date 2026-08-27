@@ -78,9 +78,11 @@ export const api = {
   blockUser: (userId: string, payload: any) => fetchApi(`/blocks/${userId}`, { method: 'POST', body: JSON.stringify(payload) }),
   unblockUser: (userId: string, blockerUserId: string) => fetchApi(`/blocks/${userId}?blockerUserId=${blockerUserId}`, { method: 'DELETE' }),
 
-  // Scheduled Rides
+  // Scheduled & Recurring Rides
   getScheduledRides: (passengerId?: string) => fetchApi(`/scheduled-rides?passengerId=${passengerId || 'usr_passenger'}`),
   createScheduledRide: (payload: any) => fetchApi('/scheduled-rides', { method: 'POST', body: JSON.stringify(payload) }),
+  cancelScheduledRide: (id: string) => fetchApi(`/scheduled-rides/${id}/cancel`, { method: 'POST' }),
+  dispatchScheduledRideNow: (id: string) => fetchApi(`/scheduled-rides/${id}/dispatch-now`, { method: 'POST' }),
 
   // Driver lifecycle helpers
   setDriverStatus: (driverId: string, availabilityStatus: string) =>

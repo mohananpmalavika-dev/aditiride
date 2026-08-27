@@ -230,7 +230,11 @@ export const App: React.FC = () => {
                 onBookingCreated={id => setActiveBookingId(id)}
               />
             ) : passengerTab === 'SCHEDULED' ? (
-              <ScheduledRidesView currentUser={currentUser} language={language} />
+              <ScheduledRidesView
+                currentUser={currentUser}
+                language={language}
+                onBookingDispatched={id => setActiveBookingId(id)}
+              />
             ) : passengerTab === 'FAVORITES' ? (
               <FavoritesAndBlocks currentUser={currentUser} language={language} />
             ) : passengerTab === 'WALLET' ? (
