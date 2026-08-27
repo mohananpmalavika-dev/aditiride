@@ -22,6 +22,11 @@ const ALLOWED_ORIGINS = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
   : ['http://localhost:5180', 'http://localhost:3000', 'http://127.0.0.1:5180'];
 
+import { createAdapter } from '@socket.io/redis-adapter';
+import { RedisClient } from './services/redis/RedisClient.js';
+
+RedisClient.init();
+
 const io = new Server(server, {
   cors: {
     origin: ALLOWED_ORIGINS,
@@ -29,6 +34,14 @@ const io = new Server(server, {
     credentials: true
   }
 });
+
+// Mount Redis Adapter if Redis is connected
+const pubClient = RedisClient.getClient();
+const subClient = RedisClient.getSubClient();
+if (pubClient && subClient) {
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log('[Socket.IO] Mounted Redis Adapter for multi-node clustering.');
+}
 
 // Security & Parsing Middlewares
 app.use(helmetMiddleware);

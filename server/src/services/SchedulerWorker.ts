@@ -3,26 +3,44 @@ import { DispatchEngine } from './DispatchEngine.js';
 import { LocationService } from './LocationService.js';
 import { FareEngine } from './FareEngine.js';
 import { SafetyService } from './SafetyService.js';
+import { ReconciliationService } from './ReconciliationService.js';
+import { RedisClient } from './redis/RedisClient.js';
 import { v4 as uuidv4 } from 'uuid';
 
 export class SchedulerWorker {
   private static timer: NodeJS.Timeout | null = null;
+  private static tickCounter = 0;
 
   /**
-   * Start the scheduler background process (polling every 30 seconds)
+   * Start the scheduler background process (polling every 30 seconds) with distributed leader locking
    */
   public static start(io?: any): void {
     if (this.timer) return;
 
     this.timer = setInterval(async () => {
       try {
+        // Distributed Lock: Only one worker instance executes this cycle across the cluster
+        const hasLock = await RedisClient.acquireWorkerLock('scheduler_tick', 25);
+        if (!hasLock) {
+          return; // Another worker replica is actively processing this interval
+        }
+
         await this.processDueScheduledBookings(io);
+
+        // Run automated reconciliation every 10 ticks (5 minutes)
+        this.tickCounter++;
+        if (this.tickCounter % 10 === 0) {
+          const report = ReconciliationService.runFinancialReconciliation();
+          if (!report.healthy) {
+            console.warn('[Reconciliation Alert] Financial discrepancy detected in automated run:', report);
+          }
+        }
       } catch (err) {
         console.error('[SchedulerWorker] Error processing scheduled rides:', err);
       }
     }, 30000);
 
-    console.log('⏰ [SchedulerWorker] Background dispatch worker started.');
+    console.log('⏰ [SchedulerWorker] Background distributed dispatch worker started.');
   }
 
   /**
@@ -62,28 +80,29 @@ export class SchedulerWorker {
           durationMin: route.durationMin,
           pickupLat: sched.pickup_lat,
           pickupLng: sched.pickup_lng,
-          driverId: sched.specific_driver_id
+          destLat: sched.destination_lat,
+          destLng: sched.destination_lng
         });
 
-        const bookingId = `bk_sched_${uuidv4().substring(0, 8)}`;
-        const bookingNumber = `SCHED-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+        const liveBookingId = `bk_${uuidv4().substring(0, 8)}`;
+        const bookingNumber = `ADITI-${Date.now().toString().slice(-6)}`;
         const otpCode = SafetyService.generateTripOtp();
 
-        // Use DispatchEngine for atomic driver reservation and expanding search
+        // Dispatch via DispatchEngine
         const dispatchResult = DispatchEngine.dispatchBooking(
           sched.passenger_id,
-          bookingId,
+          liveBookingId,
           sched.pickup_lat,
           sched.pickup_lng,
           sched.vehicle_category_id,
-          sched.specific_driver_id
+          sched.preferred_driver_id
         );
 
         const assignedDriverId = dispatchResult.candidateDriver?.driverId || null;
         const initialStatus = assignedDriverId ? 'DRIVER_ASSIGNED' : 'SEARCHING';
 
-        run(
-          `INSERT INTO bookings (
+        run(`
+          INSERT INTO bookings (
             id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
             pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
             scheduled_at, distance_km, duration_min, otp_code, fare_estimate, fare_source,
@@ -92,35 +111,34 @@ export class SchedulerWorker {
             ?, ?, ?, ?, ?, 'SCHEDULED',
             ?, ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?, ?,
-            ?, ?, 'UPI', 'PENDING', ?
-          )`,
-          [
-            bookingId, bookingNumber, sched.passenger_id, assignedDriverId, sched.vehicle_category_id,
-            sched.pickup_lat, sched.pickup_lng, sched.pickup_address, sched.destination_lat, sched.destination_lng, sched.destination_address,
-            sched.scheduled_time, route.distanceKm, route.durationMin, otpCode, quote.total_fare, quote.fare_source,
-            quote.fare_rule_version, quote.surge_multiplier, initialStatus
-          ]
-        );
+            ?, ?, ?, 'PENDING', ?
+          )
+        `, [
+          liveBookingId, bookingNumber, sched.passenger_id, assignedDriverId, sched.vehicle_category_id,
+          sched.pickup_lat, sched.pickup_lng, sched.pickup_address, sched.destination_lat, sched.destination_lng, sched.destination_address,
+          sched.scheduled_time, route.distanceKm, route.durationMin, otpCode, quote.total_fare, quote.fare_source,
+          quote.fare_rule_version, quote.surge_multiplier, sched.payment_method || 'UPI', initialStatus
+        ]);
 
+        // Register OTP in safety verifications
+        SafetyService.registerTripOtp(liveBookingId, otpCode);
+
+        // Update scheduled booking to DISPATCHED
         run(`UPDATE scheduled_bookings SET status = 'DISPATCHED' WHERE id = ?`, [sched.id]);
 
-        if (io && dispatchResult.candidateDriver) {
-          const offerPayload = {
-            bookingId,
-            bookingNumber,
-            driverId: dispatchResult.candidateDriver.driverId,
-            passengerId: sched.passenger_id,
-            pickupAddress: sched.pickup_address,
-            destinationAddress: sched.destination_address,
-            fareEstimate: quote.total_fare,
-            isScheduled: true
-          };
-          io.to(`user_${dispatchResult.candidateDriver.userId}`).emit('incoming_ride_offer', offerPayload);
-        }
-
         dispatchedCount++;
-      } catch (err) {
-        console.error(`[SchedulerWorker] Failed to dispatch scheduled ride ${sched.id}:`, err);
+
+        // Notify client via Socket.IO
+        if (io) {
+          io.to(`user_${sched.passenger_id}`).emit('scheduled_ride_dispatched', {
+            scheduledBookingId: sched.id,
+            bookingId: liveBookingId,
+            bookingNumber,
+            status: initialStatus
+          });
+        }
+      } catch (err: any) {
+        console.error(`[SchedulerWorker] Failed to dispatch scheduled booking ${sched.id}:`, err.message);
       }
     }
 

@@ -1,4 +1,6 @@
 import { query, get } from '../db/index.js';
+import { getPgPool, queryPg } from '../db/connection.js';
+import { PostgresSpatialHelper } from '../db/postgres.js';
 import { DriverProfile, Vehicle, User, FavoriteRelationship, UserBlock } from '../types/index.js';
 import { LocationService } from './LocationService.js';
 

@@ -138,13 +138,26 @@ describe('P0 Distributed Architecture, Sessions & Payment Webhook Tests', () => 
       const acquired2 = await RedisClient.acquireDistributedLease(leaseKey, 'bk_order_2', 20);
       expect(acquired2).toBe(false);
 
-      // Release lease
+      // Release lease with correct owner
       const released = await RedisClient.releaseDistributedLease(leaseKey, 'bk_order_1');
       expect(released).toBe(true);
 
       // Now available for Node 2
       const acquired3 = await RedisClient.acquireDistributedLease(leaseKey, 'bk_order_2', 20);
       expect(acquired3).toBe(true);
+    });
+
+    it('should prevent Booking A from releasing Booking B lease via compare-and-delete semantics', async () => {
+      const leaseKey = 'driver:lease:drv_concurrent_check';
+      await RedisClient.acquireDistributedLease(leaseKey, 'bk_owner_real', 30);
+
+      // Imposter tries to release with wrong expectedValue
+      const imposterRelease = await RedisClient.releaseDistributedLease(leaseKey, 'bk_imposter');
+      expect(imposterRelease).toBe(false);
+
+      // Real owner releases successfully
+      const realRelease = await RedisClient.releaseDistributedLease(leaseKey, 'bk_owner_real');
+      expect(realRelease).toBe(true);
     });
   });
 });
