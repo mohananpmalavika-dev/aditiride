@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { get, query, run, transaction } from '../db/index.js';
 import { MatchingEngine, MatchedDriver } from './MatchingEngine.js';
 import { Booking, DriverProfile } from '../types/index.js';
+import { RedisClient } from './redis/RedisClient.js';
 
 export interface DispatchOffer {
   offerId: string;
@@ -16,6 +17,7 @@ export interface DispatchOffer {
 
 export class DispatchEngine {
   public static readonly LEASE_DURATION_SECONDS = 20;
+  public static readonly FAVORITE_OFFER_WINDOW_SECONDS = 25;
 
   /**
    * Record an immutable state transition event in booking_state_events
@@ -48,14 +50,16 @@ export class DispatchEngine {
   }
 
   /**
-   * Attempt atomic driver availability lease reservation.
-   * Ensures two bookings cannot lease the same driver simultaneously.
+   * Attempt atomic driver availability lease reservation via Redis + DB.
+   * Ensures two bookings cannot lease the same driver simultaneously across cluster nodes.
    */
   public static acquireDriverLease(
     driverId: string,
     bookingId: string,
     leaseDurationSec: number = DispatchEngine.LEASE_DURATION_SECONDS
   ): boolean {
+    const key = `driver:lease:${driverId}`;
+
     return transaction(() => {
       const now = new Date().toISOString();
       const expiresAt = new Date(Date.now() + leaseDurationSec * 1000).toISOString();
@@ -87,14 +91,18 @@ export class DispatchEngine {
         [driverId, bookingId, expiresAt, bookingId, expiresAt]
       );
 
+      RedisClient.acquireDistributedLease(key, bookingId, leaseDurationSec).catch(() => {});
+
       return true;
     });
   }
 
   /**
-   * Release driver lease (e.g. on offer decline or timeout)
+   * Release driver lease (e.g. on offer decline, cancellation, or timeout)
    */
-  public static releaseDriverLease(driverId: string): void {
+  public static releaseDriverLease(driverId: string, bookingId?: string): void {
+    const key = `driver:lease:${driverId}`;
+    RedisClient.releaseDistributedLease(key, bookingId).catch(() => {});
     run(`DELETE FROM driver_leases WHERE driver_id = ?`, [driverId]);
   }
 

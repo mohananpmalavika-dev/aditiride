@@ -31,31 +31,34 @@ export class PaymentService {
     providerName: 'RAZORPAY' | 'WALLET' | 'CASH' = 'RAZORPAY',
     idempotencyKey: string
   ): Promise<{ paymentIntent: PaymentIntentRecord; providerOrderId?: string }> {
+    // 1. Idempotency Check
+    const existing = get<PaymentIntentRecord>(
+      'SELECT * FROM payment_intents WHERE idempotency_key = ?',
+      [idempotencyKey]
+    );
+    if (existing) {
+      return { paymentIntent: existing, providerOrderId: existing.provider_order_id };
+    }
+
+    // 2. Authoritative Booking Fare Lookup
+    const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [bookingId]);
+    if (!booking) {
+      throw new Error(`Booking ${bookingId} not found`);
+    }
+
+    const authoritativeAmount = booking.final_fare || booking.fare_estimate;
+    if (!authoritativeAmount || authoritativeAmount <= 0) {
+      throw new Error(`Invalid authoritative booking fare: ₹${authoritativeAmount}`);
+    }
+
+    const amountPaise = LedgerService.rupeesToPaise(authoritativeAmount);
+    
+    // 3. Request order creation from Payment Provider
+    const providerOrder = await this.provider.createOrder(bookingId, amountPaise, 'INR', { id: userId });
+    const providerOrderId = providerOrder.providerOrderId;
+    const intentId = `pi_${uuidv4().substring(0, 8)}`;
+
     return transaction(() => {
-      // 1. Idempotency Check
-      const existing = get<PaymentIntentRecord>(
-        'SELECT * FROM payment_intents WHERE idempotency_key = ?',
-        [idempotencyKey]
-      );
-      if (existing) {
-        return { paymentIntent: existing, providerOrderId: existing.provider_order_id };
-      }
-
-      // 2. Authoritative Booking Fare Lookup
-      const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [bookingId]);
-      if (!booking) {
-        throw new Error(`Booking ${bookingId} not found`);
-      }
-
-      const authoritativeAmount = booking.final_fare || booking.fare_estimate;
-      if (!authoritativeAmount || authoritativeAmount <= 0) {
-        throw new Error(`Invalid authoritative booking fare: ₹${authoritativeAmount}`);
-      }
-
-      const amountPaise = LedgerService.rupeesToPaise(authoritativeAmount);
-      const intentId = `pi_${uuidv4().substring(0, 8)}`;
-      const providerOrderId = `order_${bookingId.substring(0, 8)}_${Date.now()}`;
-
       run(
         `INSERT INTO payment_intents (id, booking_id, user_id, amount_paise, currency, provider, provider_order_id, status, idempotency_key)
          VALUES (?, ?, ?, ?, 'INR', ?, ?, 'PENDING', ?)`,

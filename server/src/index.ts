@@ -84,12 +84,32 @@ app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
 
 const PORT = process.env.PORT || 5099;
 
-getDb().then(() => {
+import { getDbConfig, initPostgresPool } from './db/connection.js';
+import { DatabaseMigrator } from './db/migrator.js';
+import { SchedulerWorker } from './services/SchedulerWorker.js';
+
+async function bootstrap() {
+  const dbConfig = getDbConfig();
+  console.log(`[Bootstrap] Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`[Bootstrap] Database engine: ${dbConfig.isPostgres ? 'PostgreSQL + PostGIS (Production Connection Pool)' : 'Local Embedded SQL'}`);
+
+  if (dbConfig.isPostgres) {
+    const pool = await initPostgresPool(dbConfig.connectionString);
+    await DatabaseMigrator.runMigrations(pool);
+  } else {
+    await getDb();
+  }
+
+  // Start background distributed scheduler worker
+  SchedulerWorker.start(io);
+
   server.listen(PORT, () => {
-    console.log(`🚀 AditiRide Authoritative Server listening on http://localhost:${PORT}`);
+    console.log(`🚀 AditiRide Pilot Server listening on http://localhost:${PORT}`);
     console.log(`📡 Real-Time Socket.IO Server active on port ${PORT}`);
   });
-}).catch((err) => {
-  console.error('Failed to initialize AditiRide database:', err);
+}
+
+bootstrap().catch((err) => {
+  console.error('FATAL APPLICATION BOOTSTRAP ERROR:', err.message || err);
   process.exit(1);
 });

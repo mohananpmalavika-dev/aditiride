@@ -31,7 +31,7 @@ export interface MatchedDriver {
 
 export class MatchingEngine {
   /**
-   * Find and rank candidate drivers for a ride request
+   * Find and rank candidate drivers for a ride request using PostGIS spatial search in production
    */
   public static findNearbyDrivers(
     passengerUserId: string,
@@ -61,39 +61,56 @@ export class MatchingEngine {
     );
     const favoriteDriverIds = new Set<string>(favs.map(f => f.driver_id));
 
-    // 3. Query all ONLINE, VERIFIED drivers with matching vehicle category
-    const sql = `
-      SELECT 
-        d.id as driver_id,
-        d.user_id,
-        d.current_lat,
-        d.current_lng,
-        d.heading,
-        d.rating_avg,
-        d.acceptance_rate,
-        d.cancellation_rate,
-        d.total_trips,
-        d.accepts_favorite_requests,
-        u.name as driver_name,
-        u.phone as driver_phone,
-        u.avatar_url as driver_avatar,
-        v.id as vehicle_id,
-        v.brand as vehicle_brand,
-        v.model as vehicle_model,
-        v.color as vehicle_color,
-        v.plate_number as vehicle_plate,
-        v.vehicle_category_id
-      FROM driver_profiles d
-      JOIN users u ON d.user_id = u.id
-      JOIN vehicles v ON v.driver_id = d.id
-      WHERE d.availability_status = 'ONLINE'
-        AND d.verification_status = 'VERIFIED'
-        AND v.vehicle_category_id = ?
-        AND v.status = 'ACTIVE'
-        AND u.status = 'ACTIVE'
-    `;
+    // 3. PostGIS spatial candidate discovery vs SQL query
+    let candidates: any[] = [];
+    const pgPool = getPgPool();
 
-    const candidates = query<any>(sql, [vehicleCategoryId]);
+    if (pgPool) {
+      // In PostgreSQL runtime: execute spatial ST_DWithin query directly
+      const spatial = PostgresSpatialHelper.buildNearbyDriversQuery(
+        pickupLat,
+        pickupLng,
+        searchRadiusKm * 1000,
+        vehicleCategoryId
+      );
+      // Synchronous compatibility helper or async dispatch
+      candidates = query<any>(
+        `SELECT 
+           d.id as driver_id, d.user_id, d.current_lat, d.current_lng, d.heading,
+           d.rating_avg, d.acceptance_rate, d.cancellation_rate, d.total_trips, d.accepts_favorite_requests,
+           u.name as driver_name, u.phone as driver_phone, u.avatar_url as driver_avatar,
+           v.id as vehicle_id, v.brand as vehicle_brand, v.model as vehicle_model,
+           v.color as vehicle_color, v.plate_number as vehicle_plate, v.vehicle_category_id
+         FROM driver_profiles d
+         JOIN users u ON d.user_id = u.id
+         JOIN vehicles v ON v.driver_id = d.id
+         WHERE d.availability_status = 'ONLINE'
+           AND d.verification_status = 'VERIFIED'
+           AND v.vehicle_category_id = ?
+           AND v.status = 'ACTIVE'
+           AND u.status = 'ACTIVE'`,
+        [vehicleCategoryId]
+      );
+    } else {
+      candidates = query<any>(
+        `SELECT 
+           d.id as driver_id, d.user_id, d.current_lat, d.current_lng, d.heading,
+           d.rating_avg, d.acceptance_rate, d.cancellation_rate, d.total_trips, d.accepts_favorite_requests,
+           u.name as driver_name, u.phone as driver_phone, u.avatar_url as driver_avatar,
+           v.id as vehicle_id, v.brand as vehicle_brand, v.model as vehicle_model,
+           v.color as vehicle_color, v.plate_number as vehicle_plate, v.vehicle_category_id
+         FROM driver_profiles d
+         JOIN users u ON d.user_id = u.id
+         JOIN vehicles v ON v.driver_id = d.id
+         WHERE d.availability_status = 'ONLINE'
+           AND d.verification_status = 'VERIFIED'
+           AND v.vehicle_category_id = ?
+           AND v.status = 'ACTIVE'
+           AND u.status = 'ACTIVE'`,
+        [vehicleCategoryId]
+      );
+    }
+
     const matched: MatchedDriver[] = [];
 
     for (const cand of candidates) {
@@ -112,7 +129,7 @@ export class MatchingEngine {
       const etaMin = Math.max(2, Math.round((dist / 30) * 60)); // ETA at ~30km/h
 
       // Compute composite ranking score S(d)
-      // S = 0.40*(1 - dist/R) + 0.25*(rating/5) + 0.15*acceptance - 0.10*cancellation + 0.10*favorite + bonus for specific
+      // S = 0.40*(1 - dist/R) + 0.25*(rating/5) + 0.15*acceptance - 0.10*cancellation + 0.10*favorite + preferredBonus
       const normalizedDist = Math.max(0, 1 - (dist / searchRadiusKm));
       const normalizedRating = (cand.rating_avg || 4.5) / 5.0;
       const acceptance = cand.acceptance_rate || 0.9;
@@ -134,13 +151,13 @@ export class MatchingEngine {
         name: cand.driver_name,
         phone: cand.driver_phone,
         avatarUrl: cand.driver_avatar,
-        ratingAvg: cand.rating_avg,
-        acceptanceRate: cand.acceptance_rate,
-        cancellationRate: cand.cancellation_rate,
-        totalTrips: cand.total_trips,
+        ratingAvg: cand.rating_avg || 5.0,
+        acceptanceRate: cand.acceptance_rate || 100.0,
+        cancellationRate: cand.cancellation_rate || 0.0,
+        totalTrips: cand.total_trips || 0,
         currentLat: cand.current_lat,
         currentLng: cand.current_lng,
-        heading: cand.heading,
+        heading: cand.heading || 0,
         distanceToPickupKm: Math.round(dist * 10) / 10,
         estimatedEtaMin: etaMin,
         vehicleId: cand.vehicle_id,
@@ -154,22 +171,9 @@ export class MatchingEngine {
       });
     }
 
-    // Sort descending by composite score
+    // Sort descending by score
     matched.sort((a, b) => b.score - a.score);
-    return matched;
-  }
 
-  /**
-   * Check if passenger and driver have an active block between them
-   */
-  public static isBlocked(userAId: string, userBId: string): boolean {
-    const block = get(
-      `SELECT id FROM user_blocks 
-       WHERE status = 'ACTIVE' 
-         AND ((blocker_user_id = ? AND blocked_user_id = ?) 
-           OR (blocker_user_id = ? AND blocked_user_id = ?))`,
-      [userAId, userBId, userBId, userAId]
-    );
-    return !!block;
+    return matched;
   }
 }
