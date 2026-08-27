@@ -530,6 +530,22 @@ CREATE TABLE IF NOT EXISTS booking_otp_verifications (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Persistent Authentication Sessions with Refresh Token Rotation
+CREATE TABLE IF NOT EXISTS auth_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  refresh_token_hash TEXT UNIQUE NOT NULL,
+  device_id TEXT,
+  device_name TEXT,
+  ip TEXT NOT NULL,
+  user_agent TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at TEXT,
+  rotated_from TEXT
+);
+
 -- Indexes for lightning fast geospatial & lifecycle queries
 CREATE INDEX IF NOT EXISTS idx_driver_status ON driver_profiles(availability_status, verification_status);
 CREATE INDEX IF NOT EXISTS idx_driver_location ON driver_profiles(current_lat, current_lng);
@@ -545,4 +561,6 @@ CREATE INDEX IF NOT EXISTS idx_state_events_booking ON booking_state_events(book
 CREATE INDEX IF NOT EXISTS idx_driver_leases ON driver_leases(driver_id, status, lease_expires_at);
 CREATE INDEX IF NOT EXISTS idx_trip_share_token_hash ON trip_share_tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_payment_intents_order ON payment_intents(provider_order_id, status);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, revoked_at);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_hash ON auth_sessions(refresh_token_hash);
 `;

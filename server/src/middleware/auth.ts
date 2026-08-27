@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
+import { UserRole } from '../types/index.js';
 
 if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET)) {
   throw new Error('CRITICAL SECURITY ERROR: JWT_SECRET and JWT_REFRESH_SECRET must be explicitly configured in production environment.');
@@ -11,7 +13,7 @@ export const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'aditiride_d
 export const ACCESS_TOKEN_TTL = '15m';
 export const REFRESH_TOKEN_TTL = '30d';
 
-export type UserRole = 'SUPER_ADMIN' | 'ADMIN' | 'DRIVER' | 'PASSENGER' | 'FLEET_MANAGER';
+export { UserRole };
 
 export type Permission =
   | 'ride.create'
@@ -40,7 +42,7 @@ export type Permission =
   | 'fleet.vehicle.manage'
   | 'fleet.analytics.read';
 
-const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
+export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   SUPER_ADMIN: [
     'ride.create', 'ride.cancel.own', 'ride.accept', 'ride.start', 'ride.complete',
     'driver.location.update.own', 'driver.pricing.update.own', 'driver.status.manage',
@@ -51,7 +53,9 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'fleet.driver.manage', 'fleet.vehicle.manage', 'fleet.analytics.read'
   ],
   ADMIN: [
-    'ride.create', 'ride.cancel.own', 'fare.category.read', 'fare.category.manage',
+    'ride.create', 'ride.cancel.own', 'ride.accept', 'ride.start', 'ride.complete',
+    'driver.location.update.own', 'driver.pricing.update.own', 'driver.status.manage',
+    'fare.category.read', 'fare.category.manage',
     'wallet.read.own', 'wallet.topup.own', 'wallet.pay.own',
     'sos.trigger', 'sos.resolve', 'user.block', 'favorite.manage',
     'admin.driver.verify', 'admin.user.suspend', 'admin.surge.manage', 'admin.pricing.manage', 'admin.audit.read',
@@ -73,6 +77,22 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'fare.category.read',
     'fleet.driver.manage', 'fleet.vehicle.manage', 'fleet.analytics.read',
     'wallet.read.own', 'wallet.topup.own'
+  ],
+  SUPPORT_AGENT: [
+    'fare.category.read',
+    'sos.resolve',
+    'admin.audit.read'
+  ],
+  SAFETY_AGENT: [
+    'fare.category.read',
+    'sos.resolve',
+    'admin.audit.read'
+  ],
+  PRICING_MANAGER: [
+    'fare.category.read',
+    'fare.category.manage',
+    'admin.pricing.manage',
+    'admin.surge.manage'
   ]
 };
 
@@ -98,7 +118,8 @@ export function generateAccessToken(user: { id: string; role: UserRole; email?: 
       email: user.email,
       phone: user.phone,
       name: user.name,
-      permissions
+      permissions,
+      jti: crypto.randomBytes(16).toString('hex')
     },
     JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_TTL }
@@ -110,7 +131,8 @@ export function generateRefreshToken(user: { id: string; role: UserRole }): stri
     {
       id: user.id,
       role: user.role,
-      type: 'REFRESH'
+      type: 'REFRESH',
+      jti: crypto.randomBytes(16).toString('hex')
     },
     JWT_REFRESH_SECRET,
     { expiresIn: REFRESH_TOKEN_TTL }

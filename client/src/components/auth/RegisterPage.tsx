@@ -38,15 +38,15 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
   const [username, setUsername] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('Thathu@110');
+  const [password, setPassword] = useState('');
   const [emergencyContact, setEmergencyContact] = useState('');
 
   // Driver Fields
   const [vehicleCategoryId, setVehicleCategoryId] = useState('cat_auto');
-  const [vehicleBrand, setVehicleBrand] = useState('Bajaj');
-  const [vehicleModel, setVehicleModel] = useState('Compact RE');
-  const [vehiclePlate, setVehiclePlate] = useState('KL-08-AB-1234');
-  const [licenseNumber, setLicenseNumber] = useState('DL-08-2024009876');
+  const [vehicleBrand, setVehicleBrand] = useState('');
+  const [vehicleModel, setVehicleModel] = useState('');
+  const [vehiclePlate, setVehiclePlate] = useState('');
+  const [licenseNumber, setLicenseNumber] = useState('');
 
   // Fleet Owner Fields
   const [companyName, setCompanyName] = useState('');
@@ -57,8 +57,20 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !phone.trim()) {
-      setErrorMsg('Name and Phone number are required.');
+      setErrorMsg('Full name and mobile phone number are required.');
       return;
+    }
+
+    if (!password || password.length < 6) {
+      setErrorMsg('Password is required and must be at least 6 characters.');
+      return;
+    }
+
+    if (role === 'DRIVER') {
+      if (!vehicleBrand.trim() || !vehicleModel.trim() || !vehiclePlate.trim() || !licenseNumber.trim()) {
+        setErrorMsg('All vehicle and driving license details are required for driver registration.');
+        return;
+      }
     }
 
     setIsLoading(true);
@@ -70,7 +82,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
         username: username.trim() || undefined,
         phone: phone.trim(),
         email: email.trim() || undefined,
-        password: password || 'Thathu@110',
+        password: password,
         role,
         preferredLanguage: 'en',
         emergencyContact
@@ -78,12 +90,12 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
 
       if (role === 'DRIVER') {
         payload.vehicleCategoryId = vehicleCategoryId;
-        payload.vehicleBrand = vehicleBrand;
-        payload.vehicleModel = vehicleModel;
-        payload.vehiclePlate = vehiclePlate;
-        payload.licenseNumber = licenseNumber;
+        payload.vehicleBrand = vehicleBrand.trim();
+        payload.vehicleModel = vehicleModel.trim();
+        payload.vehiclePlate = vehiclePlate.trim();
+        payload.licenseNumber = licenseNumber.trim();
       } else if (role === 'FLEET_MANAGER') {
-        payload.companyName = companyName;
+        payload.companyName = companyName.trim();
       }
 
       const res = await api.registerUser(payload);

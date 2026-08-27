@@ -12,6 +12,8 @@ import { AdminService } from '../services/AdminService.js';
 import { IdempotencyService } from '../services/IdempotencyService.js';
 import { DispatchEngine } from '../services/DispatchEngine.js';
 import { DriverKYCService } from '../services/DriverKYCService.js';
+import { AuthSessionService } from '../services/AuthSessionService.js';
+import { ReconciliationService } from '../services/ReconciliationService.js';
 import { createBookingSchema } from '../validators/schemas.js';
 import {
   authenticateToken,
@@ -35,10 +37,10 @@ import {
 export const apiRouter = Router();
 
 // ==========================================
-// 1. AUTHENTICATION & USERS
+// 1. AUTHENTICATION & USERS (Session-Based with Refresh Token Rotation)
 // ==========================================
 apiRouter.post('/auth/login', (req: Request, res: Response) => {
-  const { identifier, password } = req.body;
+  const { identifier, password, deviceId, deviceName } = req.body;
 
   if (!identifier) {
     return res.status(400).json({ error: 'Please enter your username, email, or phone number' });
@@ -74,14 +76,52 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
     `, [user.id]);
   }
 
-  // Generate cryptographically signed JWT token
-  const token = generateToken(user);
+  // Create persistent session with refresh token
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const ua = req.headers['user-agent'] || 'AditiRide App';
+  const session = AuthSessionService.createSession(user, ip, ua, deviceId, deviceName);
 
   res.json({
     user,
     roleData,
-    token
+    token: session.accessToken,
+    refreshToken: session.refreshToken,
+    expiresAt: session.expiresAt
   });
+});
+
+apiRouter.post('/auth/refresh', (req: Request, res: Response) => {
+  const { refreshToken } = req.body;
+  if (!refreshToken) {
+    return res.status(400).json({ error: 'Refresh token is required.' });
+  }
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const ua = req.headers['user-agent'] || 'AditiRide App';
+
+  try {
+    const newSession = AuthSessionService.rotateSession(refreshToken, ip, ua);
+    res.json({
+      token: newSession.accessToken,
+      refreshToken: newSession.refreshToken
+    });
+  } catch (err: any) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/auth/logout', (req: Request, res: Response) => {
+  const { refreshToken } = req.body;
+  if (refreshToken) {
+    AuthSessionService.revokeSession(refreshToken);
+  }
+  res.json({ success: true, message: 'Logged out successfully.' });
+});
+
+apiRouter.post('/auth/logout-all', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const count = AuthSessionService.revokeAllUserSessions(authReq.user.id);
+  res.json({ success: true, message: `Logged out from all ${count} active sessions.` });
 });
 
 apiRouter.post('/auth/register', (req: Request, res: Response) => {
@@ -103,6 +143,10 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Name and Phone number are required' });
   }
 
+  if (!password || password.trim().length < 6) {
+    return res.status(400).json({ error: 'Password is required and must be at least 6 characters long' });
+  }
+
   const existingPhone = get<User>('SELECT * FROM users WHERE phone = ?', [phone]);
   if (existingPhone) {
     return res.status(409).json({ error: 'An account with this phone number already exists' });
@@ -117,7 +161,7 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
 
   const userId = `usr_${uuidv4().substring(0, 8)}`;
   const userRole = role || 'PASSENGER';
-  const hashedPassword = hashPassword(password || 'Thathu@110');
+  const hashedPassword = hashPassword(password);
   const userEmail = email || `${username || phone}@aditiride.com`;
 
   run(`
@@ -1047,6 +1091,37 @@ apiRouter.post('/wallet/pay', authenticateToken, (req: Request, res: Response) =
   }
 });
 
+apiRouter.post('/payments/create-intent', authenticateToken, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const idempotencyKey = (req.headers['idempotency-key'] as string) || `pi_key_${Date.now()}`;
+  const { bookingId, provider } = req.body;
+
+  try {
+    const result = await PaymentService.createPaymentIntent(
+      bookingId,
+      authReq.user.id,
+      provider || 'RAZORPAY',
+      idempotencyKey
+    );
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Cryptographically Verified Authoritative Payment Webhook
+apiRouter.post('/payments/webhook', (req: Request, res: Response) => {
+  const signature = (req.headers['x-razorpay-signature'] as string) || (req.headers['x-webhook-signature'] as string) || '';
+  const rawBody = JSON.stringify(req.body);
+
+  try {
+    const result = PaymentService.handlePaymentWebhook(req.body, signature, rawBody);
+    res.json(result);
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 12. SAFETY & SOS
 // ==========================================
@@ -1088,6 +1163,11 @@ apiRouter.get('/admin/dashboard', authenticateToken, requireRole('SUPER_ADMIN', 
 apiRouter.get('/admin/audit-logs', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
   const logs = query<any>('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 50');
   res.json({ logs });
+});
+
+apiRouter.get('/admin/finance/reconciliation', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
+  const report = ReconciliationService.runFinancialReconciliation();
+  res.json({ reconciliation: report });
 });
 
 apiRouter.get('/admin/documents', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
