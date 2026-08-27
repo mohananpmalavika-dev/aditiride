@@ -84,6 +84,14 @@ export const api = {
   cancelScheduledRide: (id: string) => fetchApi(`/scheduled-rides/${id}/cancel`, { method: 'POST' }),
   dispatchScheduledRideNow: (id: string) => fetchApi(`/scheduled-rides/${id}/dispatch-now`, { method: 'POST' }),
 
+  // Tour Packages & Outstation
+  getTourPackages: () => fetchApi('/tour-packages'),
+  bookTourPackage: (payload: any) => fetchApi('/tour-packages/book', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Express Parcels & Local Shop Deliveries
+  bookParcelDelivery: (payload: any) => fetchApi('/parcels/book', { method: 'POST', body: JSON.stringify(payload) }),
+  getParcelDetails: (bookingId: string) => fetchApi(`/parcels/${bookingId}`),
+
   // Driver lifecycle helpers
   setDriverStatus: (driverId: string, availabilityStatus: string) =>
     fetchApi('/driver/status', { method: 'PATCH', body: JSON.stringify({ driverId, availabilityStatus }) }),

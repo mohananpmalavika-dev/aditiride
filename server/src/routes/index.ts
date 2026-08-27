@@ -1013,3 +1013,168 @@ apiRouter.post('/chat/:bookingId', (req: Request, res: Response) => {
   `, [msgId, bookingId, senderId, senderRole, message]);
   res.status(201).json({ success: true, messageId: msgId });
 });
+
+// ==========================================
+// 15. TOUR PACKAGES & OUTSTATION CHARTERS
+// ==========================================
+apiRouter.get('/tour-packages', (_req: Request, res: Response) => {
+  const packages = query('SELECT * FROM tour_packages WHERE active = 1 ORDER BY base_price ASC');
+  const parsed = packages.map((pkg: any) => ({
+    ...pkg,
+    vehicle_types: JSON.parse(pkg.vehicle_types_json || '[]'),
+    included_items: JSON.parse(pkg.included_items_json || '[]'),
+    itinerary: JSON.parse(pkg.itinerary_json || '[]')
+  }));
+  res.json({ packages: parsed });
+});
+
+apiRouter.post('/tour-packages/book', async (req: Request, res: Response) => {
+  const {
+    packageId,
+    passengerId,
+    startDate,
+    pickupAddress,
+    pickupLat,
+    pickupLng,
+    selectedVehicleCategory,
+    numberOfTravellers,
+    specialRequests
+  } = req.body;
+
+  const pkg = get<any>('SELECT * FROM tour_packages WHERE id = ?', [packageId]);
+  if (!pkg) return res.status(404).json({ error: 'Tour package not found' });
+
+  const bookingId = `bk_tour_${uuidv4().substring(0, 8)}`;
+  const bookingNumber = `TOUR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const otpCode = SafetyService.generateTripOtp();
+
+  const pLat = parseFloat(pickupLat) || 10.5276;
+  const pLng = parseFloat(pickupLng) || 76.2144;
+  const vehicleCat = selectedVehicleCategory || 'cat_tempo_traveller';
+
+  // Calculate fare multiplier based on vehicle
+  let multiplier = 1.0;
+  if (vehicleCat.includes('tempo')) multiplier = 1.4;
+  else if (vehicleCat.includes('bus_35')) multiplier = 2.8;
+  else if (vehicleCat.includes('bus_49')) multiplier = 4.5;
+  else if (vehicleCat.includes('suv')) multiplier = 1.2;
+
+  const totalFare = Math.round(pkg.base_price * multiplier);
+
+  run(`
+    INSERT INTO bookings (
+      id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+      pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+      scheduled_at, distance_km, duration_min, otp_code, fare_estimate, fare_source,
+      fare_rule_version, surge_multiplier, payment_method, payment_status, status
+    ) VALUES (
+      ?, ?, ?, NULL, ?, 'TOUR_PACKAGE',
+      ?, ?, ?, 10.0889, 77.0595, ?,
+      ?, 280.0, 1440, ?, ?, 'TOUR_PACKAGE',
+      'v2.0', 1.0, 'UPI', 'PENDING', 'DRIVER_ASSIGNED'
+    )
+  `, [
+    bookingId, bookingNumber, passengerId || 'usr_passenger', vehicleCat,
+    pLat, pLng, pickupAddress || 'Doorstep Pickup, Kerala', pkg.destination,
+    startDate || new Date().toISOString(), otpCode, totalFare
+  ]);
+
+  const created = get('SELECT * FROM bookings WHERE id = ?', [bookingId]);
+  res.status(201).json({
+    booking: created,
+    package: pkg,
+    message: `Tour package for ${pkg.title} booked successfully!`
+  });
+});
+
+// ==========================================
+// 16. PARCEL & LOCAL SHOP DELIVERIES
+// ==========================================
+apiRouter.post('/parcels/book', async (req: Request, res: Response) => {
+  const {
+    senderId,
+    pickupAddress,
+    pickupLat,
+    pickupLng,
+    senderPhone,
+    destinationAddress,
+    destinationLat,
+    destinationLng,
+    receiverName,
+    receiverPhone,
+    packageType,
+    weightCategory,
+    isFragile,
+    notes,
+    vehicleCategoryId
+  } = req.body;
+
+  if (!pickupAddress || !destinationAddress || !receiverName || !receiverPhone) {
+    return res.status(400).json({ error: 'Pickup, Destination, Receiver Name & Phone are required' });
+  }
+
+  const pLat = parseFloat(pickupLat) || 10.5276;
+  const pLng = parseFloat(pickupLng) || 76.2144;
+  const dLat = parseFloat(destinationLat) || 10.5360;
+  const dLng = parseFloat(destinationLng) || 76.2220;
+  const catId = vehicleCategoryId || 'cat_parcel_express';
+
+  const route = await LocationService.calculateRoute({ lat: pLat, lng: pLng }, { lat: dLat, lng: dLng });
+  const quote = FareEngine.calculateFare({
+    vehicleCategoryId: catId,
+    distanceKm: route.distanceKm,
+    durationMin: route.durationMin,
+    pickupLat: pLat,
+    pickupLng: pLng
+  });
+
+  const bookingId = `bk_parcel_${uuidv4().substring(0, 8)}`;
+  const bookingNumber = `EXP-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
+  const deliveryPin = SafetyService.generateTripOtp();
+
+  run(`
+    INSERT INTO bookings (
+      id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+      pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+      scheduled_at, distance_km, duration_min, otp_code, fare_estimate, fare_source,
+      fare_rule_version, surge_multiplier, payment_method, payment_status, status
+    ) VALUES (
+      ?, ?, ?, NULL, ?, 'PARCEL_DELIVERY',
+      ?, ?, ?, ?, ?, ?,
+      NULL, ?, ?, ?, ?, 'PARCEL_TARIFF',
+      'v2.0', 1.0, 'UPI', 'PENDING', 'SEARCHING'
+    )
+  `, [
+    bookingId, bookingNumber, senderId || 'usr_passenger', catId,
+    pLat, pLng, pickupAddress, dLat, dLng, destinationAddress,
+    route.distanceKm, route.durationMin, deliveryPin, quote.total_fare
+  ]);
+
+  const parcelId = `pcl_${uuidv4().substring(0, 8)}`;
+  run(`
+    INSERT INTO parcel_deliveries (
+      id, booking_id, sender_id, receiver_name, receiver_phone,
+      package_type, weight_category, is_fragile, notes, delivery_pin, status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
+  `, [
+    parcelId, bookingId, senderId || 'usr_passenger', receiverName, receiverPhone,
+    packageType || 'SHOP_PARCEL', weightCategory || 'UP_TO_5KG', isFragile ? 1 : 0, notes || '', deliveryPin
+  ]);
+
+  const booking = get('SELECT * FROM bookings WHERE id = ?', [bookingId]);
+  const parcel = get('SELECT * FROM parcel_deliveries WHERE id = ?', [parcelId]);
+
+  res.status(201).json({
+    booking,
+    parcel,
+    deliveryPin,
+    message: 'Express parcel pickup order placed successfully!'
+  });
+});
+
+apiRouter.get('/parcels/:bookingId', (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const parcel = get('SELECT * FROM parcel_deliveries WHERE booking_id = ?', [bookingId]);
+  if (!parcel) return res.status(404).json({ error: 'Parcel record not found' });
+  res.json({ parcel });
+});

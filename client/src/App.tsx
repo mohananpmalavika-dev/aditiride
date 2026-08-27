@@ -8,6 +8,7 @@ import { PassengerHome } from './components/passenger/PassengerHome.js';
 import { LiveTrackingView } from './components/passenger/LiveTrackingView.js';
 import { WalletView } from './components/passenger/WalletView.js';
 import { ScheduledRidesView } from './components/passenger/ScheduledRidesView.js';
+import { LogisticsAndToursView } from './components/passenger/LogisticsAndToursView.js';
 import { FavoritesAndBlocks } from './components/passenger/FavoritesAndBlocks.js';
 import { TripHistoryView } from './components/passenger/TripHistoryView.js';
 import { DriverHome } from './components/driver/DriverHome.js';
@@ -15,6 +16,7 @@ import { FleetPortal } from './components/fleet/FleetPortal.js';
 import { AdminDashboard } from './components/admin/AdminDashboard.js';
 import {
   Car,
+  Truck,
   Clock,
   Heart,
   Wallet,
@@ -38,7 +40,7 @@ export const App: React.FC = () => {
     return null;
   });
 
-  const [passengerTab, setPassengerTab] = useState<'BOOK' | 'SCHEDULED' | 'FAVORITES' | 'WALLET' | 'HISTORY'>('BOOK');
+  const [passengerTab, setPassengerTab] = useState<'BOOK' | 'LOGISTICS' | 'SCHEDULED' | 'FAVORITES' | 'WALLET' | 'HISTORY'>('BOOK');
   const [language, setLanguage] = useState<LanguageCode>('en');
   const [activeBookingId, setActiveBookingId] = useState<string | null>(null);
   const [walletBalance, setWalletBalance] = useState<number>(1250);
@@ -166,6 +168,18 @@ export const App: React.FC = () => {
                 </button>
 
                 <button
+                  onClick={() => setPassengerTab('LOGISTICS')}
+                  className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl transition-all ${
+                    passengerTab === 'LOGISTICS'
+                      ? 'bg-brand-600 text-white shadow-sm'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Truck className="w-3.5 h-3.5" />
+                  <span>Logistics & Tours</span>
+                </button>
+
+                <button
                   onClick={() => setPassengerTab('SCHEDULED')}
                   className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl transition-all ${
                     passengerTab === 'SCHEDULED'
@@ -225,6 +239,12 @@ export const App: React.FC = () => {
               />
             ) : passengerTab === 'BOOK' ? (
               <PassengerHome
+                currentUser={currentUser}
+                language={language}
+                onBookingCreated={id => setActiveBookingId(id)}
+              />
+            ) : passengerTab === 'LOGISTICS' ? (
+              <LogisticsAndToursView
                 currentUser={currentUser}
                 language={language}
                 onBookingCreated={id => setActiveBookingId(id)}

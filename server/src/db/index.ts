@@ -278,12 +278,215 @@ function seedDatabase(db: Database) {
       sort_order: 7,
       icon: 'Navigation',
       image: 'https://images.unsplash.com/photo-1449965408869-eaa3f722e40d?w=150'
+    },
+    {
+      id: 'cat_pickup',
+      code: 'PICKUP',
+      name: 'Pickup Truck',
+      display_name: 'Aditi Pickup / Tata Ace',
+      description: 'Mini trucks and pickups for shifting, furniture, appliances, and shop goods (up to 1.5 Ton).',
+      vehicle_class: 'COMMERCIAL',
+      passenger_capacity: 2,
+      luggage_capacity: 15,
+      base_fare: 350.0,
+      minimum_fare: 450.0,
+      per_km_rate: 32.0,
+      per_minute_rate: 3.0,
+      waiting_rate: 3.0,
+      booking_fee: 25.0,
+      platform_fee: 20.0,
+      tax_percent: 5.0,
+      commission_percent: 15.0,
+      cancellation_fee: 100.0,
+      night_charge_multiplier: 1.25,
+      surge_enabled: 1,
+      driver_custom_fare_allowed: 1,
+      max_deviation_percent: 25.0,
+      admin_fare_enabled: 1,
+      active: 1,
+      sort_order: 8,
+      icon: 'Truck',
+      image: 'https://images.unsplash.com/photo-1586191582152-4467c69a5843?w=150'
+    },
+    {
+      id: 'cat_lorry_14ft',
+      code: 'LORRY_14FT',
+      name: '14ft Lorry',
+      display_name: '14ft Goods Lorry (4 Ton)',
+      description: 'Medium commercial lorry for home relocation, timber, commercial inventory & wholesale consignments.',
+      vehicle_class: 'HEAVY_COMMERCIAL',
+      passenger_capacity: 2,
+      luggage_capacity: 40,
+      base_fare: 750.0,
+      minimum_fare: 1000.0,
+      per_km_rate: 48.0,
+      per_minute_rate: 4.0,
+      waiting_rate: 4.0,
+      booking_fee: 40.0,
+      platform_fee: 35.0,
+      tax_percent: 5.0,
+      commission_percent: 15.0,
+      cancellation_fee: 200.0,
+      night_charge_multiplier: 1.25,
+      surge_enabled: 1,
+      driver_custom_fare_allowed: 1,
+      max_deviation_percent: 25.0,
+      admin_fare_enabled: 1,
+      active: 1,
+      sort_order: 9,
+      icon: 'Truck',
+      image: 'https://images.unsplash.com/photo-1601584115197-04ecc0da31d7?w=150'
+    },
+    {
+      id: 'cat_truck_20ft',
+      code: 'TRUCK_20FT',
+      name: 'Heavy Container Truck',
+      display_name: '20ft Heavy Truck (10 Ton)',
+      description: 'Heavy duty long-haul carrier for industrial raw materials, factory machinery & bulk cargo.',
+      vehicle_class: 'HEAVY_COMMERCIAL',
+      passenger_capacity: 2,
+      luggage_capacity: 100,
+      base_fare: 1500.0,
+      minimum_fare: 2200.0,
+      per_km_rate: 75.0,
+      per_minute_rate: 5.0,
+      waiting_rate: 5.0,
+      booking_fee: 80.0,
+      platform_fee: 60.0,
+      tax_percent: 5.0,
+      commission_percent: 15.0,
+      cancellation_fee: 400.0,
+      night_charge_multiplier: 1.25,
+      surge_enabled: 1,
+      driver_custom_fare_allowed: 1,
+      max_deviation_percent: 25.0,
+      admin_fare_enabled: 1,
+      active: 1,
+      sort_order: 10,
+      icon: 'Truck',
+      image: 'https://images.unsplash.com/photo-1519003722824-194d4455a60c?w=150'
+    },
+    {
+      id: 'cat_tempo_traveller',
+      code: 'TEMPO_TRAVELLER',
+      name: 'Tempo Traveller',
+      display_name: 'Luxury Tempo Traveller (17/26 Seater)',
+      description: 'Spacious AC pushback seats, surround audio system & roof carrier for family functions & tours.',
+      vehicle_class: 'BUS_COACH',
+      passenger_capacity: 26,
+      luggage_capacity: 20,
+      base_fare: 1200.0,
+      minimum_fare: 1800.0,
+      per_km_rate: 34.0,
+      per_minute_rate: 3.0,
+      waiting_rate: 3.0,
+      booking_fee: 50.0,
+      platform_fee: 40.0,
+      tax_percent: 5.0,
+      commission_percent: 15.0,
+      cancellation_fee: 300.0,
+      night_charge_multiplier: 1.2,
+      surge_enabled: 0,
+      driver_custom_fare_allowed: 1,
+      max_deviation_percent: 20.0,
+      admin_fare_enabled: 1,
+      active: 1,
+      sort_order: 11,
+      icon: 'Bus',
+      image: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?w=150'
+    },
+    {
+      id: 'cat_bus_35',
+      code: 'BUS_35',
+      name: '35 Seater Tourist Bus',
+      display_name: '35-Seater Deluxe Tourist Coach',
+      description: 'Deluxe AC tourist bus with individual charging, LED TV, air suspension & experienced tour driver.',
+      vehicle_class: 'BUS_COACH',
+      passenger_capacity: 35,
+      luggage_capacity: 35,
+      base_fare: 2500.0,
+      minimum_fare: 3500.0,
+      per_km_rate: 62.0,
+      per_minute_rate: 4.0,
+      waiting_rate: 4.0,
+      booking_fee: 100.0,
+      platform_fee: 80.0,
+      tax_percent: 5.0,
+      commission_percent: 15.0,
+      cancellation_fee: 500.0,
+      night_charge_multiplier: 1.2,
+      surge_enabled: 0,
+      driver_custom_fare_allowed: 1,
+      max_deviation_percent: 20.0,
+      admin_fare_enabled: 1,
+      active: 1,
+      sort_order: 12,
+      icon: 'Bus',
+      image: 'https://images.unsplash.com/photo-1570125909232-eb263c188f7e?w=150'
+    },
+    {
+      id: 'cat_bus_49',
+      code: 'BUS_49',
+      name: '49 Seater Luxury Coach',
+      display_name: '49-Seater Multi-Axle Luxury Bus (Volvo/Scania)',
+      description: 'Ultra-luxury sleeper/semi-sleeper coach with restroom, air suspension, WiFi & premium tour amenities.',
+      vehicle_class: 'BUS_COACH',
+      passenger_capacity: 49,
+      luggage_capacity: 50,
+      base_fare: 4500.0,
+      minimum_fare: 6000.0,
+      per_km_rate: 92.0,
+      per_minute_rate: 5.0,
+      waiting_rate: 5.0,
+      booking_fee: 150.0,
+      platform_fee: 120.0,
+      tax_percent: 5.0,
+      commission_percent: 15.0,
+      cancellation_fee: 1000.0,
+      night_charge_multiplier: 1.2,
+      surge_enabled: 0,
+      driver_custom_fare_allowed: 1,
+      max_deviation_percent: 20.0,
+      admin_fare_enabled: 1,
+      active: 1,
+      sort_order: 13,
+      icon: 'Bus',
+      image: 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?w=150'
+    },
+    {
+      id: 'cat_parcel_express',
+      code: 'PARCEL',
+      name: 'Parcel & Shop Delivery',
+      display_name: 'Aditi Express Parcel & Shop Delivery',
+      description: 'Instant local delivery of documents, food, medicines, keys, and retail store orders with secure PIN.',
+      vehicle_class: 'PARCEL',
+      passenger_capacity: 0,
+      luggage_capacity: 10,
+      base_fare: 40.0,
+      minimum_fare: 50.0,
+      per_km_rate: 11.0,
+      per_minute_rate: 1.5,
+      waiting_rate: 1.5,
+      booking_fee: 5.0,
+      platform_fee: 5.0,
+      tax_percent: 5.0,
+      commission_percent: 10.0,
+      cancellation_fee: 25.0,
+      night_charge_multiplier: 1.2,
+      surge_enabled: 1,
+      driver_custom_fare_allowed: 1,
+      max_deviation_percent: 20.0,
+      admin_fare_enabled: 1,
+      active: 1,
+      sort_order: 14,
+      icon: 'Package',
+      image: 'https://images.unsplash.com/photo-1526367790999-0150786686a2?w=150'
     }
   ];
 
   for (const cat of categories) {
     db.run(`
-      INSERT INTO vehicle_categories (
+      INSERT OR REPLACE INTO vehicle_categories (
         id, code, name, display_name, description, vehicle_class, passenger_capacity, luggage_capacity,
         base_fare, minimum_fare, per_km_rate, per_minute_rate, waiting_rate, booking_fee, platform_fee,
         tax_percent, commission_percent, cancellation_fee, night_charge_multiplier, surge_enabled,
@@ -295,6 +498,114 @@ function seedDatabase(db: Database) {
       cat.booking_fee, cat.platform_fee, cat.tax_percent, cat.commission_percent, cat.cancellation_fee,
       cat.night_charge_multiplier, cat.surge_enabled, cat.driver_custom_fare_allowed, cat.max_deviation_percent,
       cat.admin_fare_enabled, cat.active, cat.sort_order, cat.icon, cat.image
+    ]);
+  }
+
+  // Seed Curated Tour Packages
+  const tourPackages = [
+    {
+      id: 'tour_munnar_2d1n',
+      title: 'Munnar Misty Hills & Tea Gardens',
+      subtitle: '2 Days / 1 Night • Mattupetty Dam, Top Station & Tea Plantation Safari',
+      destination: 'Munnar, Idukki',
+      duration_days: 2,
+      duration_nights: 1,
+      base_price: 6499.0,
+      vehicle_types_json: JSON.stringify(['Sedan', 'SUV', 'Tempo Traveller']),
+      included_items_json: JSON.stringify([
+        'Doorstep Pickup & Drop (AC Car/Traveller)',
+        'Toll, Parking & Fuel included',
+        'Expert Malayalam/English Tour Driver',
+        'Sightseeing at Eravikulam National Park & Tea Museum'
+      ]),
+      itinerary_json: JSON.stringify([
+        { day: 1, title: 'Scenic Hill Climb & Dam Sightseeing', desc: 'Cheeyappara Waterfalls, Valara Viewpoint, Mattupetty Dam & Echo Point boating.' },
+        { day: 2, title: 'Tea Plantation & Top Station', desc: 'Sunrise at Top Station, Tea Museum tour, Rose Garden & return drop.' }
+      ]),
+      image_url: 'https://images.unsplash.com/photo-1602643163983-ed0babc39797?w=600',
+      badge: 'Bestseller',
+      rating: 4.95
+    },
+    {
+      id: 'tour_wayanad_3d2n',
+      title: 'Wayanad Wildlife, Caves & Waterfalls',
+      subtitle: '3 Days / 2 Nights • Edakkal Caves, Banasura Sagar & Safari',
+      destination: 'Wayanad, Kerala',
+      duration_days: 3,
+      duration_nights: 2,
+      base_price: 9800.0,
+      vehicle_types_json: JSON.stringify(['Sedan', 'SUV', 'Tempo Traveller', 'Mini Coach']),
+      included_items_json: JSON.stringify([
+        'Private Dedicated Vehicle for all 3 days',
+        'Experienced Driver with local sightseeing knowledge',
+        'All Interstate permit charges included',
+        'Banasura Sagar Dam speedboat assistance'
+      ]),
+      itinerary_json: JSON.stringify([
+        { day: 1, title: 'Banasura Sagar Dam & Karlad Lake', desc: 'Speedboating, zip-lining and relaxing sunset at Karlad.' },
+        { day: 2, title: 'Edakkal Caves & Soochipara Falls', desc: 'Neolithic cave hike, spice plantation tour and waterfall trekking.' },
+        { day: 3, title: 'Muthanga Wildlife Safari & Return', desc: 'Morning elephant & deer safari in reserve forest, Chembra peak view and return.' }
+      ]),
+      image_url: 'https://images.unsplash.com/photo-1588661759663-718cfaec65b9?w=600',
+      badge: 'Adventure Special',
+      rating: 4.9
+    },
+    {
+      id: 'tour_alleppey_houseboat',
+      title: 'Alleppey Backwaters & Houseboat Cruise',
+      subtitle: '1 Day / Overnight • Punnamada Lake, Vembanad Cruise & Village Life',
+      destination: 'Alappuzha, Kerala',
+      duration_days: 1,
+      duration_nights: 1,
+      base_price: 5200.0,
+      vehicle_types_json: JSON.stringify(['Sedan', 'SUV', 'Tempo Traveller']),
+      included_items_json: JSON.stringify([
+        'Private Cab Pickup & Return Drop',
+        'Direct Houseboat Boarding Assistance',
+        'Traditional Kerala Lunch & Evening Tea on Boat',
+        'Sunset Backwater Cruise in Vembanad Lake'
+      ]),
+      itinerary_json: JSON.stringify([
+        { day: 1, title: 'Backwater Leisure Cruise', desc: 'Board traditional Kettuvallam houseboat, sail through paddy fields, canals and village lagoons.' }
+      ]),
+      image_url: 'https://images.unsplash.com/photo-1602216056096-3b40cc0c9944?w=600',
+      badge: 'Romantic & Family',
+      rating: 4.98
+    },
+    {
+      id: 'tour_sabarimala_guruvayur',
+      title: 'Sabarimala & Guruvayur Pilgrimage Darshan',
+      subtitle: '2 Days / 1 Night • Nilakkal/Pamba or Guruvayur-Vadakkumnathan Temple Circuit',
+      destination: 'Sabarimala / Guruvayur, Kerala',
+      duration_days: 2,
+      duration_nights: 1,
+      base_price: 4800.0,
+      vehicle_types_json: JSON.stringify(['Sedan', 'SUV', 'Tempo Traveller', '35s Tourist Bus', '49s Luxury Coach']),
+      included_items_json: JSON.stringify([
+        'Special Devotee Pilgrimage Certified Captains',
+        '24/7 Waiting & Multi-stop Darshan Circuit',
+        'Comfortable Night Travel with Pushback Seating',
+        'Luggage Space for Irumudi & Travel Bags'
+      ]),
+      itinerary_json: JSON.stringify([
+        { day: 1, title: 'Temple Pickup & Journey', desc: 'Evening departure with devotional hymns, early morning arrival at Pamba/Guruvayur.' },
+        { day: 2, title: 'Darshan, Prasad & Return', desc: 'Special darshan queue coordination, afternoon return trip.' }
+      ]),
+      image_url: 'https://images.unsplash.com/photo-1582510003544-4d00b7f74220?w=600',
+      badge: 'Pilgrimage Special',
+      rating: 4.96
+    }
+  ];
+
+  for (const tour of tourPackages) {
+    db.run(`
+      INSERT OR REPLACE INTO tour_packages (
+        id, title, subtitle, destination, duration_days, duration_nights, base_price,
+        vehicle_types_json, included_items_json, itinerary_json, image_url, badge, rating, active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+      tour.id, tour.title, tour.subtitle, tour.destination, tour.duration_days, tour.duration_nights, tour.base_price,
+      tour.vehicle_types_json, tour.included_items_json, tour.itinerary_json, tour.image_url, tour.badge, tour.rating, 1
     ]);
   }
 
