@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import { Booking, User, LanguageCode } from '../../types/index.js';
 import { api } from '../../services/api.js';
@@ -22,7 +22,9 @@ import {
   Send,
   Lock,
   Download,
-  Car
+  Car,
+  Volume2,
+  QrCode
 } from 'lucide-react';
 
 interface LiveTrackingViewProps {
@@ -41,6 +43,7 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
   const [booking, setBooking] = useState<Booking | null>(null);
   const [routePolyline, setRoutePolyline] = useState<[number, number][]>([]);
   const [driverLocation, setDriverLocation] = useState<{ lat: number; lng: number; heading?: number } | null>(null);
+  const hasAnnouncedArrivalRef = useRef(false);
 
   // In-App Chat & VoIP Call Modals
   const [showChatModal, setShowChatModal] = useState(false);
@@ -59,6 +62,65 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
 
   const socket = getSocket();
 
+  // Play Pleasant Melodic Arrival Chime
+  const playArrivalChime = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+      const now = ctx.currentTime;
+
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(523.25, now); // C5
+      osc.frequency.setValueAtTime(659.25, now + 0.15); // E5
+      osc.frequency.setValueAtTime(783.99, now + 0.3); // G5
+      osc.frequency.setValueAtTime(1046.50, now + 0.45); // C6
+
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.9);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.9);
+    } catch {}
+  };
+
+  // Voice Announcement to Passenger when Driver Arrives
+  const speakDriverArrived = (b: Booking) => {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+
+    const driver = b.driver_name || 'Your Captain';
+    const vehicle = `${b.vehicle_color || ''} ${b.vehicle_brand || ''} ${b.vehicle_model || ''}`.trim();
+    const otp = b.otp_code;
+
+    let spokenText = '';
+    let voiceLang = 'en-IN';
+
+    if (language === 'ml' || currentUser.preferred_language === 'ml') {
+      spokenText = `നിങ്ങളുടെ ക്യാപ്റ്റൻ ${driver} എത്തിയിട്ടുണ്ട്! വാഹനം ${vehicle}. ദയവായി നിങ്ങളുടെ സ്റ്റാർട്ട് പിൻ ${otp} ക്യാപ്റ്റനുമായി പങ്കിടുക.`;
+      voiceLang = 'ml-IN';
+    } else if (language === 'hi' || currentUser.preferred_language === 'hi') {
+      spokenText = `आपके कैप्टन ${driver} पिकअप लोकेशन पर पहुंच चुके हैं! आपका 4 अंकों का पिन ${otp} है।`;
+      voiceLang = 'hi-IN';
+    } else if (language === 'ta' || currentUser.preferred_language === 'ta') {
+      spokenText = `உங்கள் கேப்டன் ${driver} வந்துவிட்டார்! உங்கள் பின் ${otp}.`;
+      voiceLang = 'ta-IN';
+    } else {
+      spokenText = `Your captain ${driver} has arrived at the pickup location in a ${vehicle}! Your start ride PIN is ${otp}.`;
+      voiceLang = 'en-IN';
+    }
+
+    const utterance = new SpeechSynthesisUtterance(spokenText);
+    utterance.lang = voiceLang;
+    utterance.rate = 1.0;
+    utterance.volume = 1.0;
+    window.speechSynthesis.speak(utterance);
+  };
+
   // Load active booking data & listen to real-time events
   useEffect(() => {
     loadBookingData();
@@ -75,6 +137,14 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
     const handleStatusChanged = (data: { bookingId: string; status: string; booking: any }) => {
       if (data.bookingId === bookingId) {
         setBooking(data.booking);
+        
+        // Trigger voice alert when driver arrives!
+        if (data.status === 'DRIVER_ARRIVED' && !hasAnnouncedArrivalRef.current) {
+          hasAnnouncedArrivalRef.current = true;
+          playArrivalChime();
+          setTimeout(() => speakDriverArrived(data.booking), 300);
+        }
+
         if (data.status === 'COMPLETED') {
           setShowRatingModal(true);
           confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
@@ -140,13 +210,21 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
           });
         }
 
+        // Trigger arrival voice announcement if just arrived
+        if (res.booking.status === 'DRIVER_ARRIVED' && !hasAnnouncedArrivalRef.current) {
+          hasAnnouncedArrivalRef.current = true;
+          playArrivalChime();
+          setTimeout(() => speakDriverArrived(res.booking), 300);
+        }
+
         // Fetch polyline route if not loaded
         if (routePolyline.length === 0) {
           api.calculateRoute(
             { lat: res.booking.pickup_lat, lng: res.booking.pickup_lng },
             { lat: res.booking.destination_lat, lng: res.booking.destination_lng }
           ).then(routeRes => {
-            if (routeRes.polyline) setRoutePolyline(routeRes.polyline);
+            if (routeRes.route?.polyline) setRoutePolyline(routeRes.route.polyline);
+            else if (routeRes.polyline) setRoutePolyline(routeRes.polyline);
           }).catch(() => {});
         }
 
@@ -288,6 +366,7 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
 
   const isDriverAssigned = !!booking.driver_id;
   const isTripStarted = booking.status === 'TRIP_STARTED' || booking.status === 'TRIP_IN_PROGRESS';
+  const isDriverArrived = booking.status === 'DRIVER_ARRIVED';
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-4 space-y-4">
@@ -295,13 +374,15 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
       {/* Top Emergency & Status Banner */}
       <div className="flex items-center justify-between p-4 bg-slate-900 rounded-3xl shadow-sm border border-slate-800">
         <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-2xl bg-brand-500/10 text-brand-400 flex items-center justify-center">
-            <Navigation className="w-5 h-5 animate-pulse" />
+          <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
+            isDriverArrived ? 'bg-emerald-950 text-emerald-400 animate-pulse' : 'bg-brand-500/10 text-brand-400'
+          }`}>
+            <Navigation className="w-5 h-5" />
           </div>
           <div>
             <div className="flex items-center space-x-2">
               <span className="font-extrabold text-sm text-white">
-                {booking.status.replace(/_/g, ' ')}
+                {isDriverArrived ? 'CAPTAIN ARRIVED AT PICKUP' : booking.status.replace(/_/g, ' ')}
               </span>
               <span className="text-[10px] font-mono font-bold text-brand-400 bg-brand-950 px-2 py-0.5 rounded-full border border-brand-800">
                 #{booking.booking_number}
@@ -310,6 +391,8 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
             <p className="text-xs text-slate-400 font-medium">
               {isTripStarted
                 ? 'Ride is in progress to destination'
+                : isDriverArrived
+                ? 'Captain is waiting at your location. Share your OTP / QR.'
                 : isDriverAssigned
                 ? 'Captain is en route to your pickup point'
                 : 'Searching for the best rated captain nearby...'}
@@ -347,17 +430,44 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
           className="w-full h-full"
         />
 
-        {/* 4-Digit OTP Floating Badge */}
+        {/* 4-Digit OTP & QR Code Floating Card */}
         {booking.status !== 'COMPLETED' && booking.status !== 'CANCELLED_BY_PASSENGER' && (
-          <div className="absolute top-4 left-4 z-[400] bg-slate-900/95 text-white backdrop-blur-md px-4 py-2.5 rounded-2xl shadow-xl border border-slate-700 flex items-center space-x-3">
-            <Lock className="w-4 h-4 text-emerald-400" />
+          <div className="absolute top-4 left-4 z-[400] bg-slate-900/95 text-white backdrop-blur-md px-4 py-3 rounded-2xl shadow-2xl border border-slate-700 flex items-center space-x-3.5">
+            <div className="w-10 h-10 rounded-xl bg-emerald-950/80 border border-emerald-700 text-emerald-400 flex items-center justify-center font-bold">
+              <Lock className="w-5 h-5" />
+            </div>
             <div>
-              <p className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Start Ride PIN</p>
-              <p className="text-xl font-extrabold tracking-widest text-white">{booking.otp_code}</p>
+              <p className="text-[10px] uppercase font-black text-emerald-400 tracking-wider">Start Ride PIN</p>
+              <p className="text-2xl font-black tracking-widest text-white">{booking.otp_code}</p>
             </div>
           </div>
         )}
       </div>
+
+      {/* Driver Arrival Notice Banner */}
+      {isDriverArrived && (
+        <div className="p-4 bg-gradient-to-r from-emerald-950/80 via-slate-900 to-emerald-950/80 border-2 border-emerald-500 rounded-3xl flex items-center justify-between animate-in zoom-in-95 shadow-lg shadow-emerald-500/10">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-2xl bg-emerald-600 text-white flex items-center justify-center font-bold">
+              <Volume2 className="w-5 h-5 animate-bounce" />
+            </div>
+            <div>
+              <h4 className="font-extrabold text-sm text-white">Captain Has Arrived!</h4>
+              <p className="text-xs text-emerald-300">
+                Share your PIN <span className="font-black text-white bg-emerald-900 px-2 py-0.5 rounded-md font-mono">{booking.otp_code}</span> with Captain {booking.driver_name}.
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => speakDriverArrived(booking)}
+            className="px-3 py-1.5 bg-emerald-900 hover:bg-emerald-800 text-emerald-200 rounded-xl text-xs font-bold border border-emerald-700 flex items-center space-x-1"
+          >
+            <Volume2 className="w-3.5 h-3.5" />
+            <span>Replay Voice</span>
+          </button>
+        </div>
+      )}
 
       {/* Driver Card & Inbuilt Actions */}
       {isDriverAssigned && (
