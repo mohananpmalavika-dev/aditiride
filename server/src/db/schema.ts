@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS driver_profiles (
   accepts_airport_rides INTEGER NOT NULL DEFAULT 1,
   accepts_outstation INTEGER NOT NULL DEFAULT 1,
   accepts_cash INTEGER NOT NULL DEFAULT 1,
+  free_pickup_km REAL NOT NULL DEFAULT 2.0,
+  pickup_charge_per_km REAL NOT NULL DEFAULT 10.0,
   operating_zone TEXT DEFAULT 'Thrissur & Central Kerala'
 );
 
@@ -130,6 +132,8 @@ CREATE TABLE IF NOT EXISTS driver_pricing (
   custom_per_minute REAL NOT NULL,
   custom_waiting_rate REAL NOT NULL,
   custom_minimum_fare REAL NOT NULL,
+  free_pickup_km REAL NOT NULL DEFAULT 2.0,
+  pickup_charge_per_km REAL NOT NULL DEFAULT 10.0,
   status TEXT NOT NULL DEFAULT 'ACTIVE',
   approved_by_admin INTEGER NOT NULL DEFAULT 1,
   effective_from TEXT NOT NULL DEFAULT (datetime('now')),

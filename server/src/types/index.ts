@@ -132,6 +132,8 @@ export interface DriverProfile {
   accepts_airport_rides: boolean;
   accepts_outstation: boolean;
   accepts_cash: boolean;
+  free_pickup_km?: number;
+  pickup_charge_per_km?: number;
   operating_zone?: string;
 }
 
@@ -208,6 +210,8 @@ export interface DriverPricing {
   custom_per_minute: number;
   custom_waiting_rate: number;
   custom_minimum_fare: number;
+  free_pickup_km?: number;
+  pickup_charge_per_km?: number;
   status: 'ACTIVE' | 'PENDING_APPROVAL' | 'REJECTED';
   approved_by_admin: boolean;
   effective_from: string;
@@ -321,6 +325,9 @@ export interface FareQuote {
   surge_multiplier: number;
   tax_amount: number;
   discount_amount: number;
+  pickup_distance_charge?: number;
+  driver_free_pickup_km?: number;
+  driver_pickup_distance_km?: number;
   total_fare: number;
   estimated_fare_min: number;
   estimated_fare_max: number;

@@ -136,8 +136,8 @@ export const api = {
   validateDriverPricing: (payload: any) => fetchApi('/fare/validate-driver-pricing', { method: 'POST', body: JSON.stringify(payload) }),
 
   // Matching
-  getNearbyDrivers: (lat: number, lng: number, categoryId: string, passengerId?: string, preferredDriverId?: string) =>
-    fetchApi(`/matching/nearby-drivers?lat=${lat}&lng=${lng}&vehicleCategoryId=${categoryId}&passengerUserId=${passengerId || 'usr_passenger'}&preferredDriverId=${preferredDriverId || ''}`),
+  getNearbyDrivers: (lat: number, lng: number, categoryId: string, passengerId?: string, preferredDriverId?: string, destLat?: number, destLng?: number) =>
+    fetchApi(`/matching/nearby-drivers?lat=${lat}&lng=${lng}&vehicleCategoryId=${categoryId}&passengerUserId=${passengerId || 'usr_passenger'}&preferredDriverId=${preferredDriverId || ''}${destLat !== undefined ? `&destLat=${destLat}&destLng=${destLng}` : ''}`),
 
   // Bookings
   createBooking: (payload: any, idempotencyKey: string = `book_${Date.now()}`) =>

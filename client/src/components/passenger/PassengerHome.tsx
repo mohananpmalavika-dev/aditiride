@@ -73,8 +73,11 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [selectedFavoriteDriverId, setSelectedFavoriteDriverId] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<'UPI' | 'WALLET' | 'CASH' | 'CARD'>('UPI');
 
-  // Nearby Drivers
+  // Nearby Drivers & Personalized Quotes
   const [nearbyDrivers, setNearbyDrivers] = useState<MatchedDriver[]>([]);
+  const [selectedSpecificDriver, setSelectedSpecificDriver] = useState<MatchedDriver | null>(null);
+  const [optedOutDriverIds, setOptedOutDriverIds] = useState<string[]>([]);
+  const [maxPickupRadiusKm, setMaxPickupRadiusKm] = useState<number>(5.0);
 
   // Recent Trips for 1-Tap Rebook
   const [recentTrips, setRecentTrips] = useState<any[]>([]);
@@ -159,13 +162,15 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
         }
         setQuotes(newQuotes);
 
-        // Fetch nearby drivers
+        // Fetch nearby drivers with route and pickup pricing calculation
         const matchRes = await api.getNearbyDrivers(
           pickupCoords.lat,
           pickupCoords.lng,
           selectedCategory,
           currentUser.id,
-          driverPreference === 'SPECIFIC' ? selectedFavoriteDriverId : undefined
+          driverPreference === 'SPECIFIC' ? selectedFavoriteDriverId : undefined,
+          destCoords.lat,
+          destCoords.lng
         );
         setNearbyDrivers(matchRes.drivers || []);
       } catch (err) {
@@ -276,9 +281,12 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
     }, 400);
   };
 
-  const handleCreateBooking = async () => {
+  const handleCreateBooking = async (targetDriver?: MatchedDriver) => {
     if (isSubmitting) return;
     setIsSubmitting(true);
+
+    const chosenDriver = targetDriver || selectedSpecificDriver;
+    const preferredDriverId = chosenDriver ? chosenDriver.driverId : (driverPreference === 'SPECIFIC' ? selectedFavoriteDriverId : undefined);
 
     try {
       const res = await api.createBooking({
@@ -290,7 +298,7 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
         destinationLat: destCoords.lat,
         destinationLng: destCoords.lng,
         destinationAddress,
-        preferredDriverId: driverPreference === 'SPECIFIC' ? selectedFavoriteDriverId : undefined,
+        preferredDriverId,
         paymentMethod,
         stops
       });
@@ -584,6 +592,163 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
             </div>
           </div>
 
+          {/* NEARBY DRIVERS & LIVE FARE COMPARISON (3-5 KM RADIUS) */}
+          <div className="p-5 bg-slate-900 rounded-3xl border border-slate-800 space-y-4 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <Car className="w-4 h-4 text-brand-400" />
+                  <h3 className="text-sm font-extrabold text-white">
+                    Nearby Captains & Live Quotes ({nearbyDrivers.filter(d => !optedOutDriverIds.includes(d.driverId) && d.distanceToPickupKm <= maxPickupRadiusKm).length} Available)
+                  </h3>
+                </div>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Captains configure their free pickup radius. Compare live quotes or broadcast to all.
+                </p>
+              </div>
+
+              {/* Distance Filter */}
+              <div className="flex items-center space-x-1.5 bg-slate-950 px-2.5 py-1 rounded-xl border border-slate-800 text-[11px] font-bold">
+                <span className="text-slate-400">Radius:</span>
+                <select
+                  value={maxPickupRadiusKm}
+                  onChange={e => setMaxPickupRadiusKm(parseFloat(e.target.value))}
+                  className="bg-transparent text-brand-400 font-bold outline-none cursor-pointer"
+                >
+                  <option value="3.0" className="bg-slate-900">3 KM</option>
+                  <option value="5.0" className="bg-slate-900">5 KM</option>
+                  <option value="8.0" className="bg-slate-900">8 KM</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Fast Broadcast Banner Option */}
+            <div className="p-4 bg-gradient-to-r from-brand-950 via-slate-900 to-emerald-950/60 rounded-2xl border-2 border-brand-500/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+              <div className="space-y-0.5">
+                <div className="flex items-center space-x-1.5">
+                  <Zap className="w-4 h-4 text-amber-400 animate-bounce" />
+                  <span className="text-xs font-black text-white uppercase tracking-wider">
+                    Fast Broadcast (First-to-Accept)
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-300">
+                  Broadcasts to all available captains simultaneously. First captain to accept gets the ride.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedSpecificDriver(null);
+                  handleCreateBooking();
+                }}
+                disabled={isSubmitting}
+                className="w-full sm:w-auto px-4 py-2.5 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-black shadow-md shadow-brand-500/30 transition-transform active:scale-95 shrink-0"
+              >
+                📢 Broadcast to All ({nearbyDrivers.filter(d => !optedOutDriverIds.includes(d.driverId)).length})
+              </button>
+            </div>
+
+            {/* List of 10 Candidate Drivers */}
+            <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+              {nearbyDrivers
+                .filter(d => !optedOutDriverIds.includes(d.driverId) && d.distanceToPickupKm <= maxPickupRadiusKm)
+                .slice(0, 10)
+                .map(driver => {
+                  const isSelected = selectedSpecificDriver?.driverId === driver.driverId;
+                  const isFreePickup = (driver.extraPickupKm || 0) === 0 || driver.distanceToPickupKm <= (driver.freePickupKm || 2.0);
+
+                  return (
+                    <div
+                      key={driver.driverId}
+                      className={`p-3.5 rounded-2xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
+                        isSelected
+                          ? 'bg-brand-950/70 border-brand-500 shadow-md ring-2 ring-brand-500/20'
+                          : 'bg-slate-950 border-slate-800/80 hover:border-slate-700'
+                      }`}
+                    >
+                      {/* Driver Details */}
+                      <div className="flex items-center space-x-3">
+                        <img
+                          src={driver.avatarUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100'}
+                          alt={driver.name}
+                          className="w-11 h-11 rounded-xl object-cover ring-2 ring-slate-700 shrink-0"
+                        />
+                        <div>
+                          <div className="flex items-center space-x-1.5">
+                            <span className="font-extrabold text-xs text-white">{driver.name}</span>
+                            <span className="text-[10px] font-bold px-1.5 py-0.2 bg-amber-950 text-amber-400 border border-amber-800 rounded">
+                              ⭐ {driver.ratingAvg.toFixed(1)}
+                            </span>
+                            {driver.isFavorite && (
+                              <span className="text-[10px] text-rose-400 font-bold">❤️ Fav</span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            {driver.vehicleBrand} {driver.vehicleModel} • <span className="font-mono text-slate-300">{driver.vehiclePlate}</span>
+                          </p>
+                          <div className="flex items-center space-x-2 mt-1">
+                            <span className="text-[10px] text-emerald-400 font-semibold">
+                              📍 {driver.distanceToPickupKm} km away • {driver.estimatedEtaMin} min ETA
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Pickup Policy Badge & Total Fare */}
+                      <div className="flex sm:flex-col items-center sm:items-end justify-between w-full sm:w-auto gap-2">
+                        <div className="text-left sm:text-right">
+                          <div className="text-base font-black text-white">
+                            ₹{driver.driverTotalFare || quotes[selectedCategory]?.total_fare || 90}
+                          </div>
+                          <div className="mt-0.5">
+                            {isFreePickup ? (
+                              <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800">
+                                🟢 Free Pickup ({driver.freePickupKm || 2} km free)
+                              </span>
+                            ) : (
+                              <span className="inline-block text-[10px] font-bold px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800">
+                                🟡 +₹{driver.pickupDistanceCharge} pickup fee ({driver.extraPickupKm} km @ ₹{driver.pickupChargePerKm}/km)
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Action Buttons: Direct Request & Opt-out */}
+                        <div className="flex items-center space-x-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedSpecificDriver(driver);
+                              handleCreateBooking(driver);
+                            }}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-extrabold shadow-sm transition-transform active:scale-95"
+                          >
+                            ⚡ Choose & Book
+                          </button>
+                          <button
+                            type="button"
+                            title="Opt out / hide this driver"
+                            onClick={() => setOptedOutDriverIds(prev => [...prev, driver.driverId])}
+                            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl text-xs transition-colors"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+              {nearbyDrivers.filter(d => !optedOutDriverIds.includes(d.driverId) && d.distanceToPickupKm <= maxPickupRadiusKm).length === 0 && (
+                <div className="p-6 bg-slate-950 rounded-2xl text-center border border-slate-800 space-y-2">
+                  <p className="text-xs font-bold text-slate-400">No active captains within {maxPickupRadiusKm} km.</p>
+                  <p className="text-[11px] text-slate-500">You can broadcast to expand search or select a wider radius.</p>
+                </div>
+              )}
+            </div>
+          </div>
+
           {/* Payment & Driver Preferences */}
           <div className="p-5 bg-slate-900 rounded-3xl border border-slate-800 space-y-4 shadow-sm">
             
@@ -643,7 +808,7 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
 
             {/* Confirm Booking Action Button */}
             <button
-              onClick={handleCreateBooking}
+              onClick={() => handleCreateBooking()}
               disabled={isSubmitting}
               className="w-full mt-2 py-4 bg-gradient-to-r from-brand-600 to-emerald-500 hover:from-brand-500 hover:to-emerald-400 disabled:opacity-50 text-white rounded-2xl font-extrabold text-base shadow-xl shadow-brand-500/25 transition-all flex items-center justify-center space-x-2 active:scale-98"
             >

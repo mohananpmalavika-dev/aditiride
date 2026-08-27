@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { getDb } from '../db/index.js';
+import { getDb, run } from '../db/index.js';
 import { FareEngine } from '../services/FareEngine.js';
 
 describe('Authoritative FareEngine Tests', () => {
@@ -81,5 +81,48 @@ describe('Authoritative FareEngine Tests', () => {
     });
 
     expect(multiStopQuote.total_fare).toBeGreaterThan(directQuote.total_fare);
+  });
+
+  it('calculates driver-customized free pickup distance & pickup surcharges (Ram vs Raj)', () => {
+    // Setup: Driver 1 (Ram/Rahul) sets 3 km free pickup, Driver 2 (Raj/Arun) sets 1 km free pickup
+    run(`UPDATE driver_profiles SET free_pickup_km = 3.0, pickup_charge_per_km = 10.0 WHERE id = 'drv_rahul'`);
+    run(`UPDATE driver_pricing SET free_pickup_km = 3.0, pickup_charge_per_km = 10.0 WHERE driver_id = 'drv_rahul'`);
+
+    run(`UPDATE driver_profiles SET free_pickup_km = 1.0, pickup_charge_per_km = 10.0 WHERE id = 'drv_arun'`);
+    run(`UPDATE driver_pricing SET free_pickup_km = 1.0, pickup_charge_per_km = 10.0 WHERE driver_id = 'drv_arun'`);
+
+    // Scenario: Customer is 2.5 km away from both drivers
+    const quoteRam = FareEngine.calculateFare({
+      vehicleCategoryId: 'cat_auto',
+      distanceKm: 5.0,
+      durationMin: 15,
+      driverId: 'drv_rahul',
+      driverDistanceToPickupKm: 2.5 // 2.5 <= 3.0 -> ₹0 pickup fee
+    });
+
+    const quoteRaj = FareEngine.calculateFare({
+      vehicleCategoryId: 'cat_auto',
+      distanceKm: 5.0,
+      durationMin: 15,
+      driverId: 'drv_arun',
+      driverDistanceToPickupKm: 2.5 // 2.5 > 1.0 -> (2.5 - 1.0) * 10 = ₹15 pickup fee
+    });
+
+    expect(quoteRam.pickup_distance_charge).toBe(0);
+    expect(quoteRam.driver_free_pickup_km).toBe(3.0);
+
+    expect(quoteRaj.pickup_distance_charge).toBe(15.0);
+    expect(quoteRaj.driver_free_pickup_km).toBe(1.0);
+
+    // Raj with 0.5 km pickup (within 1.0 km free) vs Raj with 2.5 km pickup (exceeding 1.0 km by 1.5 km @ ₹10/km)
+    const quoteRajClose = FareEngine.calculateFare({
+      vehicleCategoryId: 'cat_auto',
+      distanceKm: 5.0,
+      durationMin: 15,
+      driverId: 'drv_arun',
+      driverDistanceToPickupKm: 0.5 // 0.5 <= 1.0 -> ₹0 pickup fee
+    });
+    expect(quoteRajClose.pickup_distance_charge).toBe(0);
+    expect(quoteRaj.total_fare).toBe(quoteRajClose.total_fare + 15.0);
   });
 });

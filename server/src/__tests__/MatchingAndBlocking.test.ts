@@ -65,4 +65,30 @@ describe('Matching Engine & Two-Way Blocking Tests', () => {
     // Cleanup test block
     run(`DELETE FROM user_blocks WHERE id = 'blk_test_arun'`);
   });
+
+  it('computes individualized pickup distance charges and returns up to 10 candidate drivers', () => {
+    // Configure Rahul with 3 km free pickup and Arun with 1 km free pickup
+    run(`UPDATE driver_profiles SET free_pickup_km = 3.0, pickup_charge_per_km = 10.0 WHERE id = 'drv_rahul'`);
+    run(`UPDATE driver_profiles SET free_pickup_km = 1.0, pickup_charge_per_km = 10.0 WHERE id = 'drv_arun'`);
+
+    const drivers = MatchingEngine.findNearbyDrivers(
+      'usr_passenger',
+      10.5276,
+      76.2144,
+      'cat_sedan',
+      10.0,
+      undefined,
+      6.0, // 6 km trip
+      18   // 18 min trip
+    );
+
+    expect(drivers.length).toBeGreaterThan(0);
+    expect(drivers.length).toBeLessThanOrEqual(10);
+
+    const firstDriver = drivers[0];
+    expect(firstDriver.freePickupKm).toBeDefined();
+    expect(firstDriver.pickupChargePerKm).toBeDefined();
+    expect(firstDriver.driverTotalFare).toBeGreaterThan(0);
+    expect(firstDriver.distanceToPickupKm).toBeGreaterThanOrEqual(0);
+  });
 });

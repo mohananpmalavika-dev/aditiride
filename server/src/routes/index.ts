@@ -359,13 +359,67 @@ apiRouter.post('/fare/all-estimates', async (req: Request, res: Response) => {
 // ==========================================
 // 5. DRIVER DISPATCH & NEARBY MATCHING
 // ==========================================
-apiRouter.get('/drivers/nearby', optionalAuth, (req: Request, res: Response) => {
+apiRouter.get('/drivers/nearby', optionalAuth, async (req: Request, res: Response) => {
   const lat = parseFloat(req.query.lat as string) || 10.5276;
   const lng = parseFloat(req.query.lng as string) || 76.2144;
-  const categoryId = (req.query.categoryId as string) || 'cat_auto';
+  const destLat = req.query.destLat ? parseFloat(req.query.destLat as string) : undefined;
+  const destLng = req.query.destLng ? parseFloat(req.query.destLng as string) : undefined;
+  const categoryId = (req.query.categoryId as string) || (req.query.vehicleCategoryId as string) || 'cat_auto';
   const passengerId = (req as AuthenticatedRequest).user?.id || (req.query.passengerId as string) || 'usr_passenger';
+  const preferredDriverId = req.query.preferredDriverId as string;
 
-  const drivers = MatchingEngine.findNearbyDrivers(passengerId, lat, lng, categoryId, 10.0);
+  let routeDistanceKm = 5.0;
+  let routeDurationMin = 15;
+  if (destLat !== undefined && destLng !== undefined) {
+    try {
+      const route = await LocationService.calculateRoute({ lat, lng }, { lat: destLat, lng: destLng });
+      routeDistanceKm = route.distanceKm;
+      routeDurationMin = route.durationMin;
+    } catch {}
+  }
+
+  const drivers = MatchingEngine.findNearbyDrivers(
+    passengerId,
+    lat,
+    lng,
+    categoryId,
+    8.0,
+    preferredDriverId,
+    routeDistanceKm,
+    routeDurationMin
+  );
+  res.json({ drivers });
+});
+
+apiRouter.get('/matching/nearby-drivers', optionalAuth, async (req: Request, res: Response) => {
+  const lat = parseFloat(req.query.lat as string) || 10.5276;
+  const lng = parseFloat(req.query.lng as string) || 76.2144;
+  const destLat = req.query.destLat ? parseFloat(req.query.destLat as string) : undefined;
+  const destLng = req.query.destLng ? parseFloat(req.query.destLng as string) : undefined;
+  const categoryId = (req.query.vehicleCategoryId as string) || (req.query.categoryId as string) || 'cat_auto';
+  const passengerId = (req as AuthenticatedRequest).user?.id || (req.query.passengerUserId as string) || (req.query.passengerId as string) || 'usr_passenger';
+  const preferredDriverId = req.query.preferredDriverId as string;
+
+  let routeDistanceKm = 5.0;
+  let routeDurationMin = 15;
+  if (destLat !== undefined && destLng !== undefined) {
+    try {
+      const route = await LocationService.calculateRoute({ lat, lng }, { lat: destLat, lng: destLng });
+      routeDistanceKm = route.distanceKm;
+      routeDurationMin = route.durationMin;
+    } catch {}
+  }
+
+  const drivers = MatchingEngine.findNearbyDrivers(
+    passengerId,
+    lat,
+    lng,
+    categoryId,
+    8.0,
+    preferredDriverId,
+    routeDistanceKm,
+    routeDurationMin
+  );
   res.json({ drivers });
 });
 
@@ -1011,28 +1065,52 @@ apiRouter.put('/driver/pricing', authenticateToken, requireRole('DRIVER'), (req:
   const profile = get<DriverProfile>('SELECT id FROM driver_profiles WHERE user_id = ?', [authReq.user.id]);
   if (!profile) return res.status(404).json({ error: 'Driver profile not found' });
 
-  const { vehicleCategoryId, customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare } = req.body;
+  const {
+    vehicleCategoryId,
+    customBaseFare,
+    customPerKm,
+    customPerMinute,
+    customWaitingRate,
+    customMinimumFare,
+    freePickupKm,
+    pickupChargePerKm
+  } = req.body;
   
-  const validation = FareEngine.validateDriverPricing(vehicleCategoryId, customPerKm, customBaseFare);
-  if (!validation.valid) {
-    return res.status(400).json({ error: validation.message });
+  if (vehicleCategoryId && (customPerKm || customBaseFare)) {
+    const validation = FareEngine.validateDriverPricing(vehicleCategoryId, customPerKm, customBaseFare);
+    if (!validation.valid) {
+      return res.status(400).json({ error: validation.message });
+    }
   }
 
-  const existing = get('SELECT id FROM driver_pricing WHERE driver_id = ? AND vehicle_category_id = ?', [profile.id, vehicleCategoryId]);
-  if (existing) {
-    run(`
-      UPDATE driver_pricing
-      SET custom_base_fare = ?, custom_per_km = ?, custom_per_minute = ?, custom_waiting_rate = ?, custom_minimum_fare = ?
-      WHERE driver_id = ? AND vehicle_category_id = ?
-    `, [customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare, profile.id, vehicleCategoryId]);
-  } else {
-    run(`
-      INSERT INTO driver_pricing (id, driver_id, vehicle_category_id, custom_base_fare, custom_per_km, custom_per_minute, custom_waiting_rate, custom_minimum_fare)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [uuidv4(), profile.id, vehicleCategoryId, customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare]);
+  const freePickup = freePickupKm !== undefined ? Math.max(0, Number(freePickupKm)) : 2.0;
+  const pickupCharge = pickupChargePerKm !== undefined ? Math.max(0, Number(pickupChargePerKm)) : 10.0;
+
+  // Update default pickup policy in driver profile
+  run(`
+    UPDATE driver_profiles
+    SET free_pickup_km = ?, pickup_charge_per_km = ?
+    WHERE id = ?
+  `, [freePickup, pickupCharge, profile.id]);
+
+  if (vehicleCategoryId) {
+    const existing = get('SELECT id FROM driver_pricing WHERE driver_id = ? AND vehicle_category_id = ?', [profile.id, vehicleCategoryId]);
+    if (existing) {
+      run(`
+        UPDATE driver_pricing
+        SET custom_base_fare = ?, custom_per_km = ?, custom_per_minute = ?, custom_waiting_rate = ?, custom_minimum_fare = ?,
+            free_pickup_km = ?, pickup_charge_per_km = ?
+        WHERE driver_id = ? AND vehicle_category_id = ?
+      `, [customBaseFare || 40.0, customPerKm || 12.0, customPerMinute || 2.0, customWaitingRate || 2.0, customMinimumFare || 60.0, freePickup, pickupCharge, profile.id, vehicleCategoryId]);
+    } else {
+      run(`
+        INSERT INTO driver_pricing (id, driver_id, vehicle_category_id, custom_base_fare, custom_per_km, custom_per_minute, custom_waiting_rate, custom_minimum_fare, free_pickup_km, pickup_charge_per_km)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [uuidv4(), profile.id, vehicleCategoryId, customBaseFare || 40.0, customPerKm || 12.0, customPerMinute || 2.0, customWaitingRate || 2.0, customMinimumFare || 60.0, freePickup, pickupCharge]);
+    }
   }
 
-  res.json({ success: true, message: 'Driver pricing updated successfully' });
+  res.json({ success: true, message: 'Driver pricing and pickup distance policy updated successfully' });
 });
 
 apiRouter.get('/driver/earnings', authenticateToken, requireRole('DRIVER'), (req: Request, res: Response) => {

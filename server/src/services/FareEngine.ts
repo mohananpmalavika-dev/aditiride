@@ -12,6 +12,7 @@ export interface FareCalculationInput {
   destLat?: number;
   destLng?: number;
   driverId?: string;
+  driverDistanceToPickupKm?: number;
   isNightTime?: boolean;
   numberOfStops?: number;
   promoCode?: string;
@@ -22,7 +23,7 @@ export class FareEngine {
   public static readonly VERSION = '1.0';
 
   /**
-   * Calculate authoritative fare quote with itemized components
+   * Calculate authoritative fare quote with itemized components, including driver-specific pickup distance policy
    */
   public static calculateFare(input: FareCalculationInput): FareQuote {
     const category = get<VehicleCategory>(
@@ -40,29 +41,59 @@ export class FareEngine {
     let perMin = category.per_minute_rate;
     let waitingRate = category.waiting_rate;
     let minFare = category.minimum_fare;
+    let freePickupKm = 2.0;
+    let pickupChargePerKm = 10.0;
 
-    // Check if Driver Custom Pricing applies
-    if (input.driverId && category.driver_custom_fare_allowed) {
-      const driverPricing = get<DriverPricing>(
-        'SELECT * FROM driver_pricing WHERE driver_id = ? AND vehicle_category_id = ? AND status = "ACTIVE"',
-        [input.driverId, input.vehicleCategoryId]
+    // Check if Driver Custom Pricing and Pickup Policy applies
+    if (input.driverId) {
+      const driverProfile = get<any>(
+        'SELECT free_pickup_km, pickup_charge_per_km FROM driver_profiles WHERE id = ?',
+        [input.driverId]
       );
-
-      if (driverPricing && driverPricing.approved_by_admin) {
-        // Enforce admin min/max deviation guardrails
-        const maxDev = (category.max_deviation_percent || 20.0) / 100.0;
-        const minAllowedKm = category.per_km_rate * (1 - maxDev);
-        const maxAllowedKm = category.per_km_rate * (1 + maxDev);
-
-        const clampedPerKm = Math.min(Math.max(driverPricing.custom_per_km, minAllowedKm), maxAllowedKm);
-        
-        baseFare = driverPricing.custom_base_fare || category.base_fare;
-        perKm = clampedPerKm;
-        perMin = driverPricing.custom_per_minute || category.per_minute_rate;
-        waitingRate = driverPricing.custom_waiting_rate || category.waiting_rate;
-        minFare = driverPricing.custom_minimum_fare || category.minimum_fare;
-        fareSource = 'DRIVER_CUSTOM';
+      if (driverProfile) {
+        if (driverProfile.free_pickup_km !== undefined && driverProfile.free_pickup_km !== null) {
+          freePickupKm = Number(driverProfile.free_pickup_km);
+        }
+        if (driverProfile.pickup_charge_per_km !== undefined && driverProfile.pickup_charge_per_km !== null) {
+          pickupChargePerKm = Number(driverProfile.pickup_charge_per_km);
+        }
       }
+
+      if (category.driver_custom_fare_allowed) {
+        const driverPricing = get<any>(
+          'SELECT * FROM driver_pricing WHERE driver_id = ? AND vehicle_category_id = ? AND status = "ACTIVE"',
+          [input.driverId, input.vehicleCategoryId]
+        );
+
+        if (driverPricing && driverPricing.approved_by_admin) {
+          // Enforce admin min/max deviation guardrails
+          const maxDev = (category.max_deviation_percent || 20.0) / 100.0;
+          const minAllowedKm = category.per_km_rate * (1 - maxDev);
+          const maxAllowedKm = category.per_km_rate * (1 + maxDev);
+
+          const clampedPerKm = Math.min(Math.max(driverPricing.custom_per_km, minAllowedKm), maxAllowedKm);
+          
+          baseFare = driverPricing.custom_base_fare || category.base_fare;
+          perKm = clampedPerKm;
+          perMin = driverPricing.custom_per_minute || category.per_minute_rate;
+          waitingRate = driverPricing.custom_waiting_rate || category.waiting_rate;
+          minFare = driverPricing.custom_minimum_fare || category.minimum_fare;
+          if (driverPricing.free_pickup_km !== undefined && driverPricing.free_pickup_km !== null) {
+            freePickupKm = Number(driverPricing.free_pickup_km);
+          }
+          if (driverPricing.pickup_charge_per_km !== undefined && driverPricing.pickup_charge_per_km !== null) {
+            pickupChargePerKm = Number(driverPricing.pickup_charge_per_km);
+          }
+          fareSource = 'DRIVER_CUSTOM';
+        }
+      }
+    }
+
+    // Calculate Driver Pickup Surcharge (if driver distance to pickup > freePickupKm)
+    let pickupDistanceCharge = 0.0;
+    if (input.driverDistanceToPickupKm !== undefined && input.driverDistanceToPickupKm > freePickupKm) {
+      const extraKm = input.driverDistanceToPickupKm - freePickupKm;
+      pickupDistanceCharge = Math.round(extraKm * pickupChargePerKm * 100) / 100;
     }
 
     // Geofence & Zone Surcharges (e.g. Airport fee, Swaraj round surge)
@@ -122,10 +153,11 @@ export class FareEngine {
       }
     }
 
-    const totalFare = Math.max(minFare, Math.round((subtotal + taxAmount - discountAmount) * 100) / 100);
+    const tripFare = Math.max(minFare, Math.round((subtotal + taxAmount - discountAmount) * 100) / 100);
+    const totalFare = Math.round((tripFare + pickupDistanceCharge) * 100) / 100;
 
     // Commission & Driver Payout
-    const commissionableFare = totalFare - taxAmount - category.booking_fee;
+    const commissionableFare = tripFare - taxAmount - category.booking_fee;
     const platformCommission = Math.round(((commissionableFare * (category.commission_percent / 100.0)) + category.booking_fee) * 100) / 100;
     const driverPayout = Math.max(0, Math.round((totalFare - platformCommission - taxAmount) * 100) / 100);
 
@@ -146,6 +178,9 @@ export class FareEngine {
       surge_multiplier: surgeMultiplier,
       tax_amount: taxAmount,
       discount_amount: discountAmount,
+      pickup_distance_charge: pickupDistanceCharge,
+      driver_free_pickup_km: freePickupKm,
+      driver_pickup_distance_km: input.driverDistanceToPickupKm,
       total_fare: totalFare,
       estimated_fare_min: Math.floor(totalFare * 0.95),
       estimated_fare_max: Math.ceil(totalFare * 1.08),

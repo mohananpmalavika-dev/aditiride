@@ -3,6 +3,7 @@ import { getPgPool, queryPg } from '../db/connection.js';
 import { PostgresSpatialHelper } from '../db/postgres.js';
 import { DriverProfile, Vehicle, User, FavoriteRelationship, UserBlock } from '../types/index.js';
 import { LocationService } from './LocationService.js';
+import { FareEngine } from './FareEngine.js';
 
 export interface MatchedDriver {
   driverId: string;
@@ -27,11 +28,18 @@ export interface MatchedDriver {
   vehicleCategoryId: string;
   isFavorite: boolean;
   score: number;
+  // Personalized Pickup & Route Pricing
+  freePickupKm: number;
+  pickupChargePerKm: number;
+  extraPickupKm: number;
+  pickupDistanceCharge: number;
+  tripFare: number;
+  driverTotalFare: number;
 }
 
 export class MatchingEngine {
   /**
-   * Find and rank candidate drivers for a ride request using PostGIS spatial search in production
+   * Find and rank candidate drivers (up to 10) with individualized fare calculations
    */
   public static findNearbyDrivers(
     passengerUserId: string,
@@ -39,7 +47,9 @@ export class MatchingEngine {
     pickupLng: number,
     vehicleCategoryId: string,
     searchRadiusKm: number = 8.0,
-    preferredDriverId?: string
+    preferredDriverId?: string,
+    routeDistanceKm: number = 5.0,
+    routeDurationMin: number = 15
   ): MatchedDriver[] {
     // 1. Fetch Two-Way Block List (Pass -> Driver OR Driver -> Pass)
     const blocks = query<UserBlock>(
@@ -59,7 +69,7 @@ export class MatchingEngine {
       `SELECT driver_id FROM favorites WHERE passenger_id = ? AND status = 'ACTIVE'`,
       [passengerUserId]
     );
-    const favoriteDriverIds = new Set<string>(favs.map(f => f.driver_id));
+    const favoriteDriverIds = new Set<string>(favs.map((f) => f.driver_id));
 
     // 3. PostGIS spatial candidate discovery vs SQL query
     let candidates: any[] = [];
@@ -73,11 +83,11 @@ export class MatchingEngine {
         searchRadiusKm * 1000,
         vehicleCategoryId
       );
-      // Synchronous compatibility helper or async dispatch
       candidates = query<any>(
         `SELECT 
            d.id as driver_id, d.user_id, d.current_lat, d.current_lng, d.heading,
            d.rating_avg, d.acceptance_rate, d.cancellation_rate, d.total_trips, d.accepts_favorite_requests,
+           d.free_pickup_km, d.pickup_charge_per_km,
            u.name as driver_name, u.phone as driver_phone, u.avatar_url as driver_avatar,
            v.id as vehicle_id, v.brand as vehicle_brand, v.model as vehicle_model,
            v.color as vehicle_color, v.plate_number as vehicle_plate, v.vehicle_category_id
@@ -96,6 +106,7 @@ export class MatchingEngine {
         `SELECT 
            d.id as driver_id, d.user_id, d.current_lat, d.current_lng, d.heading,
            d.rating_avg, d.acceptance_rate, d.cancellation_rate, d.total_trips, d.accepts_favorite_requests,
+           d.free_pickup_km, d.pickup_charge_per_km,
            u.name as driver_name, u.phone as driver_phone, u.avatar_url as driver_avatar,
            v.id as vehicle_id, v.brand as vehicle_brand, v.model as vehicle_model,
            v.color as vehicle_color, v.plate_number as vehicle_plate, v.vehicle_category_id
@@ -128,8 +139,31 @@ export class MatchingEngine {
       const isFav = favoriteDriverIds.has(cand.driver_id);
       const etaMin = Math.max(2, Math.round((dist / 30) * 60)); // ETA at ~30km/h
 
+      // Calculate Driver-Specific Pricing with Pickup Distance Surcharge
+      const freePickupKm = cand.free_pickup_km !== undefined && cand.free_pickup_km !== null ? Number(cand.free_pickup_km) : 2.0;
+      const pickupChargePerKm = cand.pickup_charge_per_km !== undefined && cand.pickup_charge_per_km !== null ? Number(cand.pickup_charge_per_km) : 10.0;
+      const extraPickupKm = Math.max(0, Math.round((dist - freePickupKm) * 10) / 10);
+      const pickupDistanceCharge = Math.round(extraPickupKm * pickupChargePerKm * 100) / 100;
+
+      let driverTotalFare = 100;
+      let tripFare = 100;
+      try {
+        const quote = FareEngine.calculateFare({
+          vehicleCategoryId,
+          distanceKm: routeDistanceKm,
+          durationMin: routeDurationMin,
+          pickupLat,
+          pickupLng,
+          driverId: cand.driver_id,
+          driverDistanceToPickupKm: dist
+        });
+        driverTotalFare = quote.total_fare;
+        tripFare = quote.total_fare - (quote.pickup_distance_charge || 0);
+      } catch {
+        // Fallback default if category not configured
+      }
+
       // Compute composite ranking score S(d)
-      // S = 0.40*(1 - dist/R) + 0.25*(rating/5) + 0.15*acceptance - 0.10*cancellation + 0.10*favorite + preferredBonus
       const normalizedDist = Math.max(0, 1 - (dist / searchRadiusKm));
       const normalizedRating = (cand.rating_avg || 4.5) / 5.0;
       const acceptance = cand.acceptance_rate || 0.9;
@@ -167,13 +201,19 @@ export class MatchingEngine {
         vehicleColor: cand.vehicle_color,
         vehicleCategoryId: cand.vehicle_category_id,
         isFavorite: isFav,
-        score: Math.round(score * 100) / 100
+        score: Math.round(score * 100) / 100,
+        freePickupKm,
+        pickupChargePerKm,
+        extraPickupKm,
+        pickupDistanceCharge,
+        tripFare,
+        driverTotalFare
       });
     }
 
-    // Sort descending by score
+    // Sort descending by score and limit to top 10 candidate drivers
     matched.sort((a, b) => b.score - a.score);
 
-    return matched;
+    return matched.slice(0, 10);
   }
 }

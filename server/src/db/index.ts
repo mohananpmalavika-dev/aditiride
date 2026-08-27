@@ -26,6 +26,21 @@ export async function getDb(): Promise<Database> {
 
   // Initialize schema
   dbInstance.run(SCHEMA_SQL);
+
+  // SQLite Alter Table column migrations
+  try {
+    dbInstance.run("ALTER TABLE driver_profiles ADD COLUMN free_pickup_km REAL DEFAULT 2.0");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE driver_profiles ADD COLUMN pickup_charge_per_km REAL DEFAULT 10.0");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE driver_pricing ADD COLUMN free_pickup_km REAL DEFAULT 2.0");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE driver_pricing ADD COLUMN pickup_charge_per_km REAL DEFAULT 10.0");
+  } catch {}
+
   seedDatabase(dbInstance);
 
   // Upgrade any non-bcrypt user passwords to secure bcrypt hashes

@@ -63,10 +63,12 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   const [scannerStatus, setScannerStatus] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Driver Custom Pricing Studio
+  // Driver Custom Pricing Studio & Pickup Distance Policy
   const [showPricingModal, setShowPricingModal] = useState(false);
   const [customPerKm, setCustomPerKm] = useState(22.0);
   const [customBaseFare, setCustomBaseFare] = useState(85.0);
+  const [freePickupKm, setFreePickupKm] = useState(3.0);
+  const [pickupChargePerKm, setPickupChargePerKm] = useState(10.0);
 
   // Earnings
   const [earnings, setEarnings] = useState<{ todayEarnings: number; totalGrossFare: number; totalCommissionPaid: number; history: any[] }>({
@@ -559,18 +561,20 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   };
 
   const handleSaveCustomPricing = async () => {
-    if (!driverProfile?.id || !driverProfile?.vehicle_category_id) return;
+    if (!driverProfile?.id) return;
     try {
       await api.updateDriverPricing({
         driverId: driverProfile.id,
-        vehicleCategoryId: driverProfile.vehicle_category_id,
+        vehicleCategoryId: driverProfile.vehicle_category_id || 'cat_sedan',
         customBaseFare,
         customPerKm,
         customPerMinute: 2.0,
-        customWaitingRate: 2.0
+        customWaitingRate: 2.0,
+        freePickupKm,
+        pickupChargePerKm
       });
       setShowPricingModal(false);
-      alert('Custom pricing updated successfully within admin allowable bounds!');
+      alert('Custom pricing and pickup distance policy updated successfully!');
     } catch (err: any) {
       alert(err.message || 'Error updating custom pricing');
     }
@@ -1028,11 +1032,64 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
                   <span>Max: ₹100</span>
                 </div>
               </div>
+
+              {/* Free Pickup Radius & Surcharge Policy (Ram vs Raj) */}
+              <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-brand-500/30 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-emerald-400">📍 Free Pickup Radius</span>
+                  <span className="text-xs font-mono font-bold text-emerald-300 px-2 py-0.5 bg-emerald-950 border border-emerald-800 rounded-full">
+                    {freePickupKm} KM Free
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="8"
+                  step="0.5"
+                  value={freePickupKm}
+                  onChange={e => setFreePickupKm(parseFloat(e.target.value))}
+                  className="w-full accent-emerald-500"
+                />
+                <div className="flex justify-between text-[10px] text-slate-500">
+                  <span>0 km (No free pickup)</span>
+                  <span>3 km (Ram's setting)</span>
+                  <span>8 km (Max)</span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800">
+                  <div className="flex justify-between text-xs font-bold mb-1">
+                    <span className="text-slate-300">Extra Pickup Surcharge Rate</span>
+                    <span className="text-amber-400 font-mono">₹{pickupChargePerKm}/km</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="25"
+                    step="1"
+                    value={pickupChargePerKm}
+                    onChange={e => setPickupChargePerKm(parseFloat(e.target.value))}
+                    className="w-full accent-amber-500"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-500">
+                    <span>₹0/km (Free always)</span>
+                    <span>₹10/km (Standard)</span>
+                    <span>₹25/km</span>
+                  </div>
+                </div>
+
+                <div className="p-2.5 bg-slate-900/90 rounded-xl text-[11px] text-slate-300 space-y-1">
+                  <p className="font-bold text-amber-300">💡 Pickup Policy Simulation:</p>
+                  <p>
+                    Customers within <strong className="text-emerald-400">{freePickupKm} km</strong> of your location pay <strong>₹0 extra</strong>.
+                    Customers beyond {freePickupKm} km pay <strong>+₹{pickupChargePerKm}/km</strong> for extra distance.
+                  </p>
+                </div>
+              </div>
             </div>
 
             <div className="p-3 bg-slate-950 rounded-2xl text-xs space-y-1 border border-slate-800">
-              <p className="text-emerald-400 font-bold">✓ Within Admin Allowable Band</p>
-              <p className="text-slate-500 text-[11px]">Your custom quotes will be presented directly to passengers booking your category.</p>
+              <p className="text-emerald-400 font-bold">✓ Direct & Broadcast Booking Enabled</p>
+              <p className="text-slate-500 text-[11px]">Passengers can select your quote directly or broadcast to all nearby captains.</p>
             </div>
 
             <button

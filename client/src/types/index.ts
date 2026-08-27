@@ -146,4 +146,10 @@ export interface MatchedDriver {
   vehicleCategoryId: string;
   isFavorite: boolean;
   score: number;
+  freePickupKm?: number;
+  pickupChargePerKm?: number;
+  extraPickupKm?: number;
+  pickupDistanceCharge?: number;
+  driverTotalFare?: number;
+  tripFare?: number;
 }
