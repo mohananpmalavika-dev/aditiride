@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { MatchedDriver } from '../../types/index.js';
-import { Layers, Map, Compass } from 'lucide-react';
+import { Layers } from 'lucide-react';
 
 interface OpenStreetMapProps {
   center: { lat: number; lng: number };
@@ -23,26 +23,26 @@ const MAP_PROVIDERS: Record<MapProviderKey, { name: string; url: string; subdoma
     name: 'Streets',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
     maxZoom: 19,
-    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, DeLorme, NAVTEQ, USGS, Intermap, iPC, NRCAN, Esri Japan, METI, Esri China (Hong Kong), Esri (Thailand), TomTom'
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri'
   },
   VOYAGER: {
     name: 'Navigation',
     url: 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
     subdomains: 'abcd',
     maxZoom: 20,
-    attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap contributors'
+    attribution: '&copy; CARTO &copy; OpenStreetMap'
   },
   OSM: {
     name: 'OpenStreetMap',
     url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    attribution: '&copy; OpenStreetMap contributors'
   },
   SATELLITE: {
     name: 'Satellite',
     url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     maxZoom: 19,
-    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar'
   }
 };
 
@@ -64,6 +64,12 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
   const markersGroupRef = useRef<L.LayerGroup | null>(null);
   const polylineLayerRef = useRef<L.Polyline | null>(null);
 
+  // Keep latest onMapClick in ref to avoid stale closures
+  const onMapClickRef = useRef(onMapClick);
+  useEffect(() => {
+    onMapClickRef.current = onMapClick;
+  }, [onMapClick]);
+
   const [selectedProvider, setSelectedProvider] = useState<MapProviderKey>('STREETS');
   const [showLayerMenu, setShowLayerMenu] = useState(false);
 
@@ -84,7 +90,7 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-    // Initial Tile Layer (ESRI World Street Map)
+    // Initial Tile Layer
     const provider = MAP_PROVIDERS[selectedProvider];
     const tileLayer = L.tileLayer(provider.url, {
       subdomains: provider.subdomains || 'abc',
@@ -98,13 +104,13 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
     markersGroupRef.current = markersGroup;
     mapInstanceRef.current = map;
 
-    if (onMapClick) {
-      map.on('click', (e: L.LeafletMouseEvent) => {
-        onMapClick(e.latlng.lat, e.latlng.lng);
-      });
-    }
+    // Direct Map Click Handler delegating to onMapClickRef
+    map.on('click', (e: L.LeafletMouseEvent) => {
+      if (onMapClickRef.current) {
+        onMapClickRef.current(e.latlng.lat, e.latlng.lng);
+      }
+    });
 
-    // Force tile invalidation cycles on layout
     const t1 = setTimeout(() => map.invalidateSize(), 100);
     const t2 = setTimeout(() => map.invalidateSize(), 400);
 
@@ -155,18 +161,22 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
       });
     };
 
-    // 1. Pickup Marker
+    // 1. Pickup Marker (Green Pin)
     if (pickup && pickup.lat && pickup.lng) {
       const pickupIcon = createCustomIcon(`
-        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px;">
-          <div style="position: absolute; width: 38px; height: 38px; border-radius: 9999px; background-color: #10b981; opacity: 0.4; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
-          <div style="position: relative; width: 34px; height: 34px; border-radius: 9999px; background-color: #059669; border: 2.5px solid white; box-shadow: 0 4px 14px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: bold;">
+        <div style="position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer;">
+          <div style="position: absolute; width: 44px; height: 44px; border-radius: 9999px; background-color: #10b981; opacity: 0.35; animation: ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+          <div style="position: relative; width: 36px; height: 36px; border-radius: 9999px; background-color: #059669; border: 3px solid white; box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: bold;">
             📍
           </div>
+          <span style="margin-top: 2px; font-size: 10px; font-weight: 800; color: #ffffff; background-color: #064e3b; padding: 1px 6px; border-radius: 6px; border: 1px solid #059669; box-shadow: 0 2px 6px rgba(0,0,0,0.3); white-space: nowrap;">
+            PICKUP
+          </span>
         </div>
-      `);
-      const m = L.marker([pickup.lat, pickup.lng], { icon: pickupIcon }).bindPopup(`<b>Pickup:</b><br/>${pickup.address || 'Pickup Point'}`);
-      group.addLayer(m);
+      `, [44, 56]);
+      const m = L.marker([pickup.lat, pickup.lng], { icon: pickupIcon })
+        .bindPopup(`<b>📍 Pickup Point:</b><br/>${pickup.address || 'Pickup Point'}`)
+        .addTo(group);
       boundsPoints.push([pickup.lat, pickup.lng]);
     }
 
@@ -174,27 +184,32 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
     stops.forEach((stop, i) => {
       if (stop.lat && stop.lng) {
         const stopIcon = createCustomIcon(`
-          <div style="width: 28px; height: 28px; border-radius: 9999px; background-color: #f59e0b; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">
+          <div style="width: 30px; height: 30px; border-radius: 9999px; background-color: #d97706; border: 2px solid white; box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; color: white; font-size: 13px; font-weight: bold;">
             ${i + 1}
           </div>
-        `, [28, 28]);
-        const m = L.marker([stop.lat, stop.lng], { icon: stopIcon }).bindPopup(`<b>Stop ${i + 1}:</b><br/>${stop.address || 'Stop'}`);
-        group.addLayer(m);
+        `, [30, 30]);
+        const m = L.marker([stop.lat, stop.lng], { icon: stopIcon })
+          .bindPopup(`<b>Stop ${i + 1}:</b><br/>${stop.address || 'Stop'}`)
+          .addTo(group);
         boundsPoints.push([stop.lat, stop.lng]);
       }
     });
 
-    // 3. Destination Marker
+    // 3. Destination Marker (Red Flag Pin)
     if (destination && destination.lat && destination.lng) {
       const destIcon = createCustomIcon(`
-        <div style="position: relative; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px;">
-          <div style="position: relative; width: 34px; height: 34px; border-radius: 9999px; background-color: #e11d48; border: 2.5px solid white; box-shadow: 0 4px 14px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: bold;">
+        <div style="position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer;">
+          <div style="position: relative; width: 36px; height: 36px; border-radius: 9999px; background-color: #e11d48; border: 3px solid white; box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px; font-weight: bold;">
             🏁
           </div>
+          <span style="margin-top: 2px; font-size: 10px; font-weight: 800; color: #ffffff; background-color: #881337; padding: 1px 6px; border-radius: 6px; border: 1px solid #e11d48; box-shadow: 0 2px 6px rgba(0,0,0,0.3); white-space: nowrap;">
+            DESTINATION
+          </span>
         </div>
-      `);
-      const m = L.marker([destination.lat, destination.lng], { icon: destIcon }).bindPopup(`<b>Destination:</b><br/>${destination.address || 'Destination'}`);
-      group.addLayer(m);
+      `, [44, 56]);
+      const m = L.marker([destination.lat, destination.lng], { icon: destIcon })
+        .bindPopup(`<b>🏁 Destination:</b><br/>${destination.address || 'Destination'}`)
+        .addTo(group);
       boundsPoints.push([destination.lat, destination.lng]);
     }
 
@@ -207,8 +222,9 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
           </div>
         </div>
       `, [44, 44]);
-      const m = L.marker([activeDriver.lat, activeDriver.lng], { icon: driverIcon }).bindPopup(`<b>${activeDriver.name || 'Captain'}</b>`);
-      group.addLayer(m);
+      const m = L.marker([activeDriver.lat, activeDriver.lng], { icon: driverIcon })
+        .bindPopup(`<b>${activeDriver.name || 'Captain'}</b>`)
+        .addTo(group);
       boundsPoints.push([activeDriver.lat, activeDriver.lng]);
     } else if (drivers && drivers.length > 0) {
       // 5. Nearby Drivers Markers
@@ -219,12 +235,13 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
             ${vehicleEmoji}
           </div>
         `, [32, 32]);
-        const m = L.marker([d.currentLat, d.currentLng], { icon: dIcon }).bindPopup(`<b>${d.name}</b><br/>⭐ ${d.ratingAvg} • ${d.vehicleBrand} ${d.vehicleModel}`);
-        group.addLayer(m);
+        L.marker([d.currentLat, d.currentLng], { icon: dIcon })
+          .bindPopup(`<b>${d.name}</b><br/>⭐ ${d.ratingAvg} • ${d.vehicleBrand} ${d.vehicleModel}`)
+          .addTo(group);
       });
     }
 
-    // 6. Draw Polyline Route
+    // 6. Draw Real-Road Polyline Route
     if (polylineLayerRef.current) {
       polylineLayerRef.current.remove();
       polylineLayerRef.current = null;
@@ -243,7 +260,7 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
 
     // Auto-fit bounds
     if (boundsPoints.length >= 2) {
-      map.fitBounds(boundsPoints, { padding: [50, 50], maxZoom: 16 });
+      map.fitBounds(boundsPoints, { padding: [60, 60], maxZoom: 16 });
     } else if (boundsPoints.length === 1) {
       map.setView(boundsPoints[0], zoom);
     }

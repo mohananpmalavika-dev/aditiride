@@ -196,7 +196,7 @@ export class VoiceEngine {
       destQuery = cleaned.length > 2 ? cleaned : 'Lulu International Shopping Mall Thrissur';
     }
 
-    const matchedLocations = LocationService.searchLocations(destQuery);
+    const matchedLocations = LocationService.searchLocationsSync(destQuery);
     const destinationLocation = matchedLocations[0] || {
       id: 'loc_dyn_voice',
       name: destQuery,
@@ -210,7 +210,7 @@ export class VoiceEngine {
     entities.destinationLocation = destinationLocation;
 
     // Default Pickup to Current Location
-    const pickupAddress = LocationService.reverseGeocode(currentLat, currentLng);
+    const pickupAddress = LocationService.reverseGeocodeSync(currentLat, currentLng);
     entities.pickup = pickupAddress;
     entities.pickupLocation = {
       id: 'loc_pickup_curr',
@@ -237,7 +237,7 @@ export class VoiceEngine {
     }
 
     // 7. Calculate Fare Quote Preview
-    const route = LocationService.calculateRoute(
+    const route = LocationService.calculateRouteSync(
       { lat: currentLat, lng: currentLng },
       { lat: destinationLocation.lat, lng: destinationLocation.lng }
     );

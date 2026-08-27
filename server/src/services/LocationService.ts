@@ -20,7 +20,7 @@ export interface GeocodedLocation {
   type: 'LANDMARK' | 'AIRPORT' | 'STATION' | 'MALL' | 'HOSPITAL' | 'RESIDENTIAL' | 'WORK';
 }
 
-const PRELOADED_LANDMARKS: GeocodedLocation[] = [
+export const PRELOADED_LANDMARKS: GeocodedLocation[] = [
   {
     id: 'loc_swaraj',
     name: 'Swaraj Round',
@@ -121,26 +121,59 @@ const PRELOADED_LANDMARKS: GeocodedLocation[] = [
 
 export class LocationService {
   /**
-   * Search address / landmark autocomplete
+   * Search address / landmark autocomplete (Async with Nominatim + Local fallback)
    */
-  public static searchLocations(queryStr: string): GeocodedLocation[] {
+  public static async searchLocations(queryStr: string): Promise<GeocodedLocation[]> {
     if (!queryStr || queryStr.trim().length === 0) {
       return PRELOADED_LANDMARKS.slice(0, 5);
     }
 
     const q = queryStr.toLowerCase().trim();
-    const results = PRELOADED_LANDMARKS.filter(
+    const localMatches = PRELOADED_LANDMARKS.filter(
       loc => loc.name.toLowerCase().includes(q) || loc.address.toLowerCase().includes(q)
     );
 
-    if (results.length > 0) return results;
+    if (localMatches.length > 0) return localMatches;
 
-    // Fallback dynamic generator for arbitrary queries
+    // Query OpenStreetMap Nominatim for real Indian / Kerala locations
+    try {
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(queryStr)}&countrycodes=in&limit=6`,
+        { headers: { 'User-Agent': 'AditiRide-App/1.0' } }
+      );
+      if (resp.ok) {
+        const data: any = await resp.json();
+        if (Array.isArray(data) && data.length > 0) {
+          return data.map((item: any) => ({
+            id: `nom_${item.place_id}`,
+            name: item.display_name.split(',')[0],
+            address: item.display_name,
+            lat: parseFloat(item.lat),
+            lng: parseFloat(item.lon),
+            type: 'LANDMARK' as const
+          }));
+        }
+      }
+    } catch {}
+
+    return this.searchLocationsSync(queryStr);
+  }
+
+  public static searchLocationsSync(queryStr: string): GeocodedLocation[] {
+    if (!queryStr || queryStr.trim().length === 0) {
+      return PRELOADED_LANDMARKS.slice(0, 5);
+    }
+    const q = queryStr.toLowerCase().trim();
+    const localMatches = PRELOADED_LANDMARKS.filter(
+      loc => loc.name.toLowerCase().includes(q) || loc.address.toLowerCase().includes(q)
+    );
+    if (localMatches.length > 0) return localMatches;
+
     return [
       {
         id: `dyn_${Date.now()}`,
         name: queryStr,
-        address: `${queryStr}, Thrissur & Central Kerala`,
+        address: `${queryStr}, Kerala`,
         lat: 10.5276 + (Math.random() - 0.5) * 0.04,
         lng: 76.2144 + (Math.random() - 0.5) * 0.04,
         type: 'LANDMARK'
@@ -151,7 +184,40 @@ export class LocationService {
   /**
    * Reverse geocode coordinates to friendly street address
    */
-  public static reverseGeocode(lat: number, lng: number): string {
+  public static async reverseGeocode(lat: number, lng: number): Promise<string> {
+    let closest = PRELOADED_LANDMARKS[0];
+    let minDistance = Infinity;
+
+    for (const loc of PRELOADED_LANDMARKS) {
+      const dist = this.haversine(lat, lng, loc.lat, loc.lng);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closest = loc;
+      }
+    }
+
+    if (minDistance < 0.25) {
+      return closest.name + ' (' + closest.address + ')';
+    }
+
+    try {
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
+        { headers: { 'User-Agent': 'AditiRide-App/1.0' } }
+      );
+      if (resp.ok) {
+        const data: any = await resp.json();
+        if (data && data.display_name) {
+          const parts = data.display_name.split(',');
+          return parts.slice(0, 3).join(',').trim();
+        }
+      }
+    } catch {}
+
+    return this.reverseGeocodeSync(lat, lng);
+  }
+
+  public static reverseGeocodeSync(lat: number, lng: number): string {
     let closest = PRELOADED_LANDMARKS[0];
     let minDistance = Infinity;
 
@@ -167,13 +233,52 @@ export class LocationService {
       return closest.name + ' (' + closest.address + ')';
     }
 
-    return `Near (${lat.toFixed(4)}, ${lng.toFixed(4)}), Thrissur`;
+    return `Near (${lat.toFixed(4)}, ${lng.toFixed(4)}), Kerala`;
   }
 
   /**
-   * Calculate route distance, duration and smooth polyline
+   * Calculate turn-by-turn road route distance, duration and geometry via OSRM
    */
-  public static calculateRoute(
+  public static async calculateRoute(
+    origin: { lat: number; lng: number },
+    destination: { lat: number; lng: number },
+    stops: { lat: number; lng: number }[] = []
+  ): Promise<RouteResult> {
+    const waypoints = [origin, ...stops, destination];
+    const waypointsStr = waypoints.map(w => `${w.lng},${w.lat}`).join(';');
+
+    try {
+      const osrmUrl = `http://router.project-osrm.org/route/v1/driving/${waypointsStr}?overview=full&geometries=geojson`;
+      const resp = await fetch(osrmUrl);
+      
+      if (resp.ok) {
+        const data: any = await resp.json();
+        if (data && data.code === 'Ok' && data.routes && data.routes.length > 0) {
+          const primaryRoute = data.routes[0];
+          const distKm = Math.round((primaryRoute.distance / 1000) * 10) / 10;
+          const durMin = Math.max(3, Math.round(primaryRoute.duration / 60));
+          
+          // Map OSRM GeoJSON [lng, lat] to Leaflet [lat, lng]
+          const leafletPolyline: [number, number][] = primaryRoute.geometry.coordinates.map(
+            (coord: [number, number]) => [coord[1], coord[0]]
+          );
+
+          return {
+            distanceKm: distKm,
+            durationMin: durMin,
+            polyline: leafletPolyline,
+            summary: `${distKm} km • ${durMin} mins`
+          };
+        }
+      }
+    } catch (err) {
+      console.warn('OSRM routing fetch failed, using fallback interpolation:', err);
+    }
+
+    return this.calculateRouteSync(origin, destination, stops);
+  }
+
+  public static calculateRouteSync(
     origin: { lat: number; lng: number },
     destination: { lat: number; lng: number },
     stops: { lat: number; lng: number }[] = []
@@ -186,26 +291,20 @@ export class LocationService {
       const p1 = waypoints[i];
       const p2 = waypoints[i + 1];
       const legDist = this.haversine(p1.lat, p1.lng, p2.lat, p2.lng);
-      // Real road distance factor ~1.25x straight line
       const roadDist = legDist * 1.28;
       totalDistKm += roadDist;
 
-      // Generate road-snapped polyline interpolation
-      const steps = Math.max(12, Math.floor(roadDist * 5));
+      const steps = Math.max(16, Math.floor(roadDist * 6));
       for (let s = 0; s <= steps; s++) {
         const ratio = s / steps;
-        // Add subtle road curvature jitter for realism
-        const curvature = Math.sin(ratio * Math.PI) * 0.002 * (i % 2 === 0 ? 1 : -1);
-        const lat = p1.lat + (p2.lat - p1.lat) * ratio + curvature;
-        const lng = p1.lng + (p2.lng - p1.lng) * ratio + curvature * 0.8;
+        const lat = p1.lat + (p2.lat - p1.lat) * ratio;
+        const lng = p1.lng + (p2.lng - p1.lng) * ratio;
         polyline.push([lat, lng]);
       }
     }
 
     totalDistKm = Math.round(totalDistKm * 10) / 10;
     if (totalDistKm < 1.0) totalDistKm = 1.2;
-
-    // Average speed 25 km/h in urban city traffic
     const durationMin = Math.max(4, Math.round((totalDistKm / 24) * 60));
 
     return {

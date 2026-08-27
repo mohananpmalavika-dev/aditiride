@@ -23,7 +23,9 @@ import {
   RotateCcw,
   Crosshair,
   ArrowUpDown,
-  X
+  X,
+  CheckCircle2,
+  MousePointerClick
 } from 'lucide-react';
 
 interface PassengerHomeProps {
@@ -37,19 +39,19 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
   language,
   onBookingCreated
 }) => {
-  // Pickup Location (Default: Current GPS Location)
-  const [pickupAddress, setPickupAddress] = useState('📍 Current Location (Locating...)');
-  const [pickupSearch, setPickupSearch] = useState('');
+  // Pickup Location State
+  const [pickupAddress, setPickupAddress] = useState('Swaraj Round, Thrissur');
   const [pickupCoords, setPickupCoords] = useState({ lat: 10.5276, lng: 76.2144 });
   const [isLocatingGPS, setIsLocatingGPS] = useState(false);
-  const [isEditingPickup, setIsEditingPickup] = useState(false);
 
-  // Destination Location
-  const [destinationSearch, setDestinationSearch] = useState('');
+  // Destination Location State
   const [destinationAddress, setDestinationAddress] = useState('Lulu International Shopping Mall Thrissur');
   const [destCoords, setDestCoords] = useState({ lat: 10.5360, lng: 76.2220 });
 
-  // Autocomplete Search
+  // Map Click Target Mode ('DESTINATION' or 'PICKUP')
+  const [mapClickTarget, setMapClickTarget] = useState<'DESTINATION' | 'PICKUP'>('DESTINATION');
+
+  // Search Autocomplete State
   const [activeSearchField, setActiveSearchField] = useState<'PICKUP' | 'DESTINATION' | null>(null);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -57,7 +59,7 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
   // Multi-stop trips
   const [stops, setStops] = useState<{ lat: number; lng: number; address: string }[]>([]);
 
-  // Categories & Quotes
+  // Categories & Real-time Fares
   const [categories, setCategories] = useState<VehicleCategory[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('cat_auto');
   const [quotes, setQuotes] = useState<Record<string, FareQuote>>({});
@@ -81,7 +83,7 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Function to locate GPS current location
+  // Locate Current GPS Location
   const handleDetectCurrentLocation = () => {
     setIsLocatingGPS(true);
     if (navigator.geolocation) {
@@ -92,28 +94,24 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
           setPickupCoords({ lat, lng });
           try {
             const r = await api.reverseGeocode(lat, lng);
-            setPickupAddress(r.address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+            setPickupAddress(r.address || `Current Location (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
           } catch {
-            setPickupAddress('📍 Current Location (GPS)');
+            setPickupAddress(`Current Location (${lat.toFixed(4)}, ${lng.toFixed(4)})`);
           }
           setIsLocatingGPS(false);
-          setIsEditingPickup(false);
         },
         err => {
-          console.warn('Geolocation denied or error, using default Kerala location:', err);
-          setPickupAddress('📍 Swaraj Round, Thrissur (Default)');
-          setPickupCoords({ lat: 10.5276, lng: 76.2144 });
+          console.warn('Geolocation denied or timed out:', err);
           setIsLocatingGPS(false);
         },
         { enableHighAccuracy: true, timeout: 8000 }
       );
     } else {
-      setPickupAddress('📍 Swaraj Round, Thrissur');
       setIsLocatingGPS(false);
     }
   };
 
-  // Load initial data & auto-locate on mount
+  // Initial load
   useEffect(() => {
     handleDetectCurrentLocation();
 
@@ -180,11 +178,11 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
     }
   }, [pickupCoords, destCoords, stops, categories, selectedCategory, driverPreference, selectedFavoriteDriverId]);
 
-  // Handle autocomplete search
-  const handleSearchLocations = async (text: string, field: 'PICKUP' | 'DESTINATION') => {
+  // Autocomplete search handler
+  const handleSearchInput = async (text: string, field: 'PICKUP' | 'DESTINATION') => {
     setActiveSearchField(field);
-    if (field === 'PICKUP') setPickupSearch(text);
-    else setDestinationSearch(text);
+    if (field === 'PICKUP') setPickupAddress(text);
+    else setDestinationAddress(text);
 
     if (text.trim().length > 1) {
       setIsSearching(true);
@@ -200,22 +198,20 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
     }
   };
 
-  const handleSelectLocation = (loc: any) => {
+  const handleSelectSearchResult = (loc: any) => {
+    const fullAddr = loc.name + (loc.address ? `, ${loc.address}` : '');
     if (activeSearchField === 'PICKUP') {
-      setPickupAddress(loc.name + (loc.address ? `, ${loc.address}` : ''));
+      setPickupAddress(fullAddr);
       setPickupCoords({ lat: loc.lat, lng: loc.lng });
-      setPickupSearch('');
-      setIsEditingPickup(false);
     } else {
-      setDestinationAddress(loc.name + (loc.address ? `, ${loc.address}` : ''));
+      setDestinationAddress(fullAddr);
       setDestCoords({ lat: loc.lat, lng: loc.lng });
-      setDestinationSearch('');
     }
     setActiveSearchField(null);
     setIsSearching(false);
   };
 
-  // Swap Pickup & Destination
+  // Swap Locations
   const handleSwapLocations = () => {
     const tempAddr = pickupAddress;
     const tempCoords = pickupCoords;
@@ -223,6 +219,31 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
     setPickupCoords(destCoords);
     setDestinationAddress(tempAddr);
     setDestCoords(tempCoords);
+  };
+
+  // Direct Map Click Handler -> Synchronizes directly into Input Field!
+  const handleMapClick = async (lat: number, lng: number) => {
+    try {
+      const res = await api.reverseGeocode(lat, lng);
+      const addr = res.address || `Point (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+
+      if (mapClickTarget === 'PICKUP') {
+        setPickupCoords({ lat, lng });
+        setPickupAddress(addr);
+      } else {
+        setDestCoords({ lat, lng });
+        setDestinationAddress(addr);
+      }
+    } catch {
+      const addr = `Point (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+      if (mapClickTarget === 'PICKUP') {
+        setPickupCoords({ lat, lng });
+        setPickupAddress(addr);
+      } else {
+        setDestCoords({ lat, lng });
+        setDestinationAddress(addr);
+      }
+    }
   };
 
   const handleVoiceBookingConfirm = async (parsed: any) => {
@@ -291,30 +312,6 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
     setPaymentMethod(pastTrip.payment_method || 'UPI');
   };
 
-  // Map Click to Set Location
-  const handleMapClick = async (lat: number, lng: number) => {
-    try {
-      const r = await api.reverseGeocode(lat, lng);
-      const addr = r.address || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
-      // Set destination on map click by default, or pickup if editing pickup
-      if (isEditingPickup) {
-        setPickupCoords({ lat, lng });
-        setPickupAddress(addr);
-        setIsEditingPickup(false);
-      } else {
-        setDestCoords({ lat, lng });
-        setDestinationAddress(addr);
-      }
-    } catch {
-      if (isEditingPickup) {
-        setPickupCoords({ lat, lng });
-        setIsEditingPickup(false);
-      } else {
-        setDestCoords({ lat, lng });
-      }
-    }
-  };
-
   return (
     <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8">
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -347,89 +344,57 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
             <div className="relative p-4 bg-slate-950 rounded-2xl border border-slate-800 space-y-3">
               
               {/* Connector Route Line Graphic */}
-              <div className="absolute left-7 top-8 bottom-8 flex flex-col items-center justify-between pointer-events-none z-0">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-emerald-400/20"></span>
+              <div className="absolute left-7 top-7 bottom-7 flex flex-col items-center justify-between pointer-events-none z-0">
+                <span className="w-3 h-3 rounded-full bg-emerald-400 ring-4 ring-emerald-400/20"></span>
                 <span className="w-0.5 flex-1 bg-gradient-to-b from-emerald-500 via-brand-500 to-rose-500 my-1"></span>
-                <span className="w-2.5 h-2.5 rounded-sm bg-rose-500 ring-2 ring-rose-500/20"></span>
+                <span className="w-3 h-3 rounded-sm bg-rose-500 ring-4 ring-rose-500/20"></span>
               </div>
 
-              {/* 1. PICKUP LOCATION INPUT (Default: Current Location, Editable) */}
+              {/* 1. PICKUP LOCATION INPUT (Editable & Map Sync) */}
               <div className="relative pl-8 z-10">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between mb-1">
                   <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400">
-                    Pickup Location (Current GPS)
+                    Pickup Location (Current GPS / Edited)
                   </span>
-                  {!isEditingPickup && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsEditingPickup(true);
-                        setPickupSearch('');
-                      }}
-                      className="text-[11px] font-bold text-brand-400 hover:text-brand-300 underline"
-                    >
-                      Edit Pickup
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setMapClickTarget('PICKUP')}
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all ${
+                      mapClickTarget === 'PICKUP'
+                        ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    {mapClickTarget === 'PICKUP' ? '✓ Clicking Map Sets Pickup' : 'Set Via Map'}
+                  </button>
                 </div>
 
-                {isEditingPickup ? (
-                  <div className="mt-1 flex items-center bg-slate-900 border border-brand-500 rounded-xl px-3 py-2 text-xs">
-                    <MapPin className="w-4 h-4 text-emerald-400 mr-2 shrink-0" />
-                    <input
-                      type="text"
-                      autoFocus
-                      value={pickupSearch}
-                      onChange={e => handleSearchLocations(e.target.value, 'PICKUP')}
-                      placeholder="Type pickup address or landmark..."
-                      className="w-full bg-transparent font-semibold text-white placeholder:text-slate-500 focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleDetectCurrentLocation}
-                      title="Use Current GPS Location"
-                      className="p-1 text-emerald-400 hover:bg-slate-800 rounded-lg shrink-0 ml-1"
-                    >
-                      <Crosshair className={`w-4 h-4 ${isLocatingGPS ? 'animate-spin' : ''}`} />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingPickup(false)}
-                      className="p-1 text-slate-400 hover:text-white rounded-lg shrink-0 ml-1"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                ) : (
-                  <div
-                    onClick={() => {
-                      setIsEditingPickup(true);
-                      setPickupSearch('');
-                    }}
-                    className="mt-1 flex items-center justify-between bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded-xl px-3 py-2.5 text-xs cursor-pointer transition-colors"
+                <div className="flex items-center bg-slate-900 border border-slate-800 focus-within:border-emerald-500 rounded-xl px-3 py-2 text-xs transition-colors">
+                  <MapPin className="w-4 h-4 text-emerald-400 mr-2 shrink-0" />
+                  <input
+                    type="text"
+                    value={pickupAddress}
+                    onChange={e => handleSearchInput(e.target.value, 'PICKUP')}
+                    onFocus={() => setActiveSearchField('PICKUP')}
+                    placeholder="Enter pickup location or click map..."
+                    className="w-full bg-transparent font-semibold text-white placeholder:text-slate-500 focus:outline-none"
+                  />
+                  
+                  {/* GPS Locate Me Button */}
+                  <button
+                    type="button"
+                    onClick={handleDetectCurrentLocation}
+                    title="Locate My Live GPS Position"
+                    className="flex items-center space-x-1 px-2 py-1 bg-emerald-950/60 hover:bg-emerald-900 border border-emerald-800 text-emerald-400 rounded-lg text-[10px] font-bold shrink-0 ml-1 transition-all"
                   >
-                    <div className="flex items-center space-x-2 truncate">
-                      <MapPin className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span className="font-bold text-white truncate">{pickupAddress}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={e => {
-                        e.stopPropagation();
-                        handleDetectCurrentLocation();
-                      }}
-                      title="Refresh Current GPS"
-                      className="flex items-center space-x-1 px-2 py-0.5 bg-emerald-950/60 border border-emerald-800 text-emerald-400 rounded-lg text-[10px] font-bold shrink-0 ml-2"
-                    >
-                      <Crosshair className={`w-3 h-3 ${isLocatingGPS ? 'animate-spin' : ''}`} />
-                      <span>GPS</span>
-                    </button>
-                  </div>
-                )}
+                    <Crosshair className={`w-3.5 h-3.5 ${isLocatingGPS ? 'animate-spin' : ''}`} />
+                    <span>GPS</span>
+                  </button>
+                </div>
               </div>
 
               {/* Swap Button */}
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 z-20">
+              <div className="absolute right-3 top-1/2 -translate-y-1/2 z-20">
                 <button
                   type="button"
                   onClick={handleSwapLocations}
@@ -440,25 +405,40 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
                 </button>
               </div>
 
-              {/* 2. DESTINATION LOCATION INPUT */}
+              {/* 2. DESTINATION LOCATION INPUT (Editable & Map Sync) */}
               <div className="relative pl-8 z-10">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">
-                  Destination
-                </span>
-                <div className="mt-1 flex items-center bg-slate-900 border border-slate-800 focus-within:border-brand-500 rounded-xl px-3 py-2 text-xs">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-rose-400">
+                    Destination Location
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setMapClickTarget('DESTINATION')}
+                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all ${
+                      mapClickTarget === 'DESTINATION'
+                        ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
+                        : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                    }`}
+                  >
+                    {mapClickTarget === 'DESTINATION' ? '✓ Clicking Map Sets Destination' : 'Set Via Map'}
+                  </button>
+                </div>
+
+                <div className="flex items-center bg-slate-900 border border-slate-800 focus-within:border-rose-500 rounded-xl px-3 py-2 text-xs transition-colors">
                   <Search className="w-4 h-4 text-rose-400 mr-2 shrink-0" />
                   <input
                     type="text"
-                    value={destinationSearch}
-                    onChange={e => handleSearchLocations(e.target.value, 'DESTINATION')}
-                    placeholder={destinationAddress || t('search_destination', language)}
+                    value={destinationAddress}
+                    onChange={e => handleSearchInput(e.target.value, 'DESTINATION')}
+                    onFocus={() => setActiveSearchField('DESTINATION')}
+                    placeholder="Enter destination location or click map..."
                     className="w-full bg-transparent font-semibold text-white placeholder:text-slate-500 focus:outline-none"
                   />
-                  {destinationSearch && (
+                  {destinationAddress && (
                     <button
                       type="button"
-                      onClick={() => setDestinationSearch('')}
-                      className="p-1 text-slate-400 hover:text-white shrink-0"
+                      onClick={() => setDestinationAddress('')}
+                      className="p-1 text-slate-400 hover:text-white shrink-0 ml-1"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -466,7 +446,7 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
                 </div>
               </div>
 
-              {/* Autocomplete Dropdown */}
+              {/* Autocomplete Search Dropdown */}
               {isSearching && searchResults.length > 0 && (
                 <div className="absolute top-full left-0 right-0 mt-1.5 bg-slate-900 rounded-2xl shadow-2xl border border-slate-800 py-1.5 z-50 animate-in fade-in">
                   <div className="px-3 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
@@ -475,7 +455,7 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
                   {searchResults.map(loc => (
                     <button
                       key={loc.id}
-                      onClick={() => handleSelectLocation(loc)}
+                      onClick={() => handleSelectSearchResult(loc)}
                       className="w-full text-left px-4 py-2.5 hover:bg-brand-950/40 flex items-start space-x-3 transition-colors border-b border-slate-800/50 last:border-0"
                     >
                       <MapPin className="w-4 h-4 text-brand-400 mt-0.5 shrink-0" />
@@ -496,17 +476,17 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
                 Popular:
               </span>
               {[
-                { name: 'Lulu Mall', lat: 10.5360, lng: 76.2220 },
+                { name: 'Lulu Mall Thrissur', lat: 10.5360, lng: 76.2220 },
                 { name: 'Cochin Airport (COK)', lat: 10.1518, lng: 76.3930 },
                 { name: 'Railway Station', lat: 10.5186, lng: 76.2085 },
-                { name: 'Infopark', lat: 10.0125, lng: 76.3620 }
+                { name: 'Infopark Kakkanad', lat: 10.0125, lng: 76.3620 }
               ].map((loc, idx) => (
                 <button
                   key={idx}
                   onClick={() => {
                     setDestinationAddress(loc.name);
                     setDestCoords({ lat: loc.lat, lng: loc.lng });
-                    setDestinationSearch('');
+                    setActiveSearchField(null);
                     setIsSearching(false);
                   }}
                   className="px-3 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 font-semibold shrink-0 transition-colors text-[11px]"
@@ -517,7 +497,7 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
             </div>
           </div>
 
-          {/* 1-Tap Quick Rebook Card (from Recent Trips) */}
+          {/* 1-Tap Quick Rebook Card */}
           {recentTrips.length > 0 && (
             <div className="p-4 bg-gradient-to-r from-brand-950/40 to-emerald-950/30 rounded-3xl border border-brand-800/40 flex items-center justify-between shadow-sm">
               <div className="flex items-center space-x-3 truncate mr-3">
@@ -683,9 +663,44 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
 
         </div>
 
-        {/* Right OpenStreetMap & Live Nearby Fleet Map */}
-        <div className="lg:col-span-6 flex flex-col space-y-4">
-          <div className="w-full h-[520px] lg:h-[760px] rounded-3xl overflow-hidden shadow-xl border border-slate-800 relative">
+        {/* Right OpenStreetMap & Live Interactive Map */}
+        <div className="lg:col-span-6 flex flex-col space-y-3">
+          
+          {/* Map Click Interactive Mode Switcher */}
+          <div className="p-3 bg-slate-900 rounded-2xl border border-slate-800 flex items-center justify-between">
+            <div className="flex items-center space-x-2 text-xs text-slate-300">
+              <MousePointerClick className="w-4 h-4 text-brand-400" />
+              <span className="font-bold">Click map to set:</span>
+            </div>
+            
+            <div className="flex items-center space-x-2">
+              <button
+                type="button"
+                onClick={() => setMapClickTarget('PICKUP')}
+                className={`px-3 py-1 rounded-xl text-xs font-extrabold transition-all border ${
+                  mapClickTarget === 'PICKUP'
+                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-md ring-2 ring-emerald-500/20'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                }`}
+              >
+                📍 Pickup Point
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMapClickTarget('DESTINATION')}
+                className={`px-3 py-1 rounded-xl text-xs font-extrabold transition-all border ${
+                  mapClickTarget === 'DESTINATION'
+                    ? 'bg-rose-600 text-white border-rose-500 shadow-md ring-2 ring-rose-500/20'
+                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                }`}
+              >
+                🏁 Destination
+              </button>
+            </div>
+          </div>
+
+          <div className="w-full h-[520px] lg:h-[720px] rounded-3xl overflow-hidden shadow-xl border border-slate-800 relative">
             <OpenStreetMap
               center={pickupCoords}
               pickup={{ lat: pickupCoords.lat, lng: pickupCoords.lng, address: pickupAddress }}
@@ -696,15 +711,6 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
               onMapClick={handleMapClick}
               className="w-full h-full"
             />
-
-            {/* Floating Location Overlay Badge */}
-            <div className="absolute top-4 left-4 z-[400] bg-slate-900/95 backdrop-blur-md px-3.5 py-2.5 rounded-2xl shadow-xl border border-slate-800 max-w-xs text-xs space-y-1">
-              <div className="flex items-center space-x-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <p className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Pickup</p>
-              </div>
-              <p className="font-bold text-white truncate">{pickupAddress}</p>
-            </div>
           </div>
         </div>
 

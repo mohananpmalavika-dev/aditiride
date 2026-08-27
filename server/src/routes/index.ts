@@ -199,26 +199,26 @@ apiRouter.put('/categories/:id', (req: Request, res: Response) => {
 // ==========================================
 // 3. LOCATION & OPENSTREETMAP ROUTING
 // ==========================================
-apiRouter.get('/location/search', (req: Request, res: Response) => {
+apiRouter.get('/location/search', async (req: Request, res: Response) => {
   const q = (req.query.q as string) || '';
-  const results = LocationService.searchLocations(q);
+  const results = await LocationService.searchLocations(q);
   res.json({ locations: results });
 });
 
-apiRouter.get('/location/reverse', (req: Request, res: Response) => {
+apiRouter.get('/location/reverse', async (req: Request, res: Response) => {
   const lat = parseFloat(req.query.lat as string) || 10.5276;
   const lng = parseFloat(req.query.lng as string) || 76.2144;
-  const address = LocationService.reverseGeocode(lat, lng);
+  const address = await LocationService.reverseGeocode(lat, lng);
   res.json({ address, lat, lng });
 });
 
-apiRouter.post('/location/route', (req: Request, res: Response) => {
+apiRouter.post('/location/route', async (req: Request, res: Response) => {
   const { origin, destination, stops } = req.body;
   if (!origin || !destination) {
     return res.status(400).json({ error: 'Origin and Destination coordinates are required' });
   }
 
-  const route = LocationService.calculateRoute(origin, destination, stops || []);
+  const route = await LocationService.calculateRoute(origin, destination, stops || []);
   res.json({ route });
 });
 
@@ -244,9 +244,13 @@ apiRouter.post('/fare/estimate', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.post('/fare/all-estimates', (req: Request, res: Response) => {
+apiRouter.post('/fare/all-estimates', async (req: Request, res: Response) => {
   const { origin, destination, driverId } = req.body;
-  const route = LocationService.calculateRoute(origin, destination);
+  if (!origin || !destination) {
+    return res.status(400).json({ error: 'Origin and Destination are required' });
+  }
+
+  const route = await LocationService.calculateRoute(origin, destination);
   const categories = query<VehicleCategory>('SELECT * FROM vehicle_categories WHERE active = 1 ORDER BY sort_order ASC');
 
   const quotes = categories.map(cat => {
@@ -297,7 +301,7 @@ apiRouter.get('/matching/nearby-drivers', (req: Request, res: Response) => {
 // ==========================================
 // 6. BOOKINGS & TRIP LIFECYCLE
 // ==========================================
-apiRouter.post('/bookings', (req: Request, res: Response) => {
+apiRouter.post('/bookings', async (req: Request, res: Response) => {
   const idempotencyKey = req.headers['idempotency-key'] as string;
   const {
     passengerId,
@@ -320,7 +324,7 @@ apiRouter.post('/bookings', (req: Request, res: Response) => {
   }
 
   // Calculate route and authoritative fare
-  const route = LocationService.calculateRoute(
+  const route = await LocationService.calculateRoute(
     { lat: pickupLat, lng: pickupLng },
     { lat: destinationLat, lng: destinationLng },
     stops ? stops.map((s: any) => ({ lat: s.lat, lng: s.lng })) : []
