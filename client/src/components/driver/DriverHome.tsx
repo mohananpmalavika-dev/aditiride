@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, LanguageCode, Booking } from '../../types/index.js';
 import { api } from '../../services/api.js';
 import { getSocket } from '../../services/socket.js';
@@ -21,7 +21,10 @@ import {
   MessageSquare,
   AlertTriangle,
   Sliders,
-  FileCheck
+  FileCheck,
+  Volume2,
+  VolumeX,
+  Radio
 } from 'lucide-react';
 
 interface DriverHomeProps {
@@ -35,6 +38,9 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   const [activeTrip, setActiveTrip] = useState<Booking | null>(null);
   const [incomingOffer, setIncomingOffer] = useState<any | null>(null);
   const [offerCountdown, setOfferCountdown] = useState(20);
+
+  // Voice Alert Settings
+  const [voiceAlertsEnabled, setVoiceAlertsEnabled] = useState(true);
 
   // In-App Chat & In-App Call
   const [showChatModal, setShowChatModal] = useState(false);
@@ -50,7 +56,6 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   const [showPricingModal, setShowPricingModal] = useState(false);
   const [customPerKm, setCustomPerKm] = useState(22.0);
   const [customBaseFare, setCustomBaseFare] = useState(85.0);
-  const [pricingValidation, setPricingValidation] = useState<any>({ valid: true });
 
   // Earnings
   const [earnings, setEarnings] = useState<{ todayEarnings: number; totalGrossFare: number; totalCommissionPaid: number; history: any[] }>({
@@ -61,6 +66,91 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   });
 
   const socket = getSocket();
+
+  // Play Pleasant Melodic Chime using Web Audio API
+  const playChimeSound = () => {
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioContextClass) return;
+      const ctx = new AudioContextClass();
+
+      const now = ctx.currentTime;
+      const osc1 = ctx.createOscillator();
+      const osc2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc1.type = 'sine';
+      osc1.frequency.setValueAtTime(587.33, now); // D5
+      osc1.frequency.exponentialRampToValueAtTime(880.00, now + 0.15); // A5
+
+      osc2.type = 'triangle';
+      osc2.frequency.setValueAtTime(880.00, now + 0.15);
+      osc2.frequency.exponentialRampToValueAtTime(1174.66, now + 0.35); // D6
+
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+
+      osc1.connect(gain);
+      osc2.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc1.start(now);
+      osc1.stop(now + 0.25);
+      osc2.start(now + 0.15);
+      osc2.stop(now + 0.6);
+    } catch (e) {
+      console.warn('Web Audio chime not available:', e);
+    }
+  };
+
+  // Synthesize Spoken Voice Announcement
+  const speakVoiceAlert = (offerData: any) => {
+    if (!('speechSynthesis' in window)) return;
+
+    window.speechSynthesis.cancel(); // clear previous queue
+    const passenger = offerData.passengerName || 'Passenger';
+    const destination = (offerData.destinationAddress || 'Destination').split(',')[0];
+    const fare = Math.round(offerData.fareEstimate || offerData.fare || 150);
+
+    let spokenText = '';
+    let voiceLang = 'en-IN';
+
+    if (language === 'ml' || currentUser.preferred_language === 'ml') {
+      spokenText = `ശ്രദ്ധിക്കുക ക്യാപ്റ്റൻ! പുതിയ റൈഡ് ബുക്കിംഗ് എത്തിയിട്ടുണ്ട്. ${passenger} ൽ നിന്നും ${destination} ലേക്ക്. ഏകദേശ നിരക്ക് ${fare} രൂപ. സ്വീകരിക്കുക.`;
+      voiceLang = 'ml-IN';
+    } else if (language === 'hi' || currentUser.preferred_language === 'hi') {
+      spokenText = `ध्यान दें कैप्टन! नया राइड अनुरोध। यात्री ${passenger}। गंतव्य ${destination}। अनुमानित किराया ${fare} रुपये। कृपया स्वीकार करें।`;
+      voiceLang = 'hi-IN';
+    } else if (language === 'ta' || currentUser.preferred_language === 'ta') {
+      spokenText = `புதிய சவாரி முன்பதிவு வந்துள்ளது! கட்டணம் ${fare} ரூபாய். தயவுசெய்து ஏற்கவும்.`;
+      voiceLang = 'ta-IN';
+    } else {
+      spokenText = `Attention Captain! New ride booking request from ${passenger} to ${destination}. Estimated fare ${fare} Rupees. Please accept within 20 seconds.`;
+      voiceLang = 'en-IN';
+    }
+
+    const utterance = new SpeechSynthesisUtterance(spokenText);
+    utterance.lang = voiceLang;
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+
+    // Select suitable voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const matchingVoice = voices.find(v => v.lang.startsWith(voiceLang.slice(0, 2)));
+    if (matchingVoice) utterance.voice = matchingVoice;
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const testVoiceAlert = () => {
+    playChimeSound();
+    speakVoiceAlert({
+      passengerName: 'Dhanya Menon',
+      destinationAddress: 'Lulu Mall Thrissur',
+      fareEstimate: 185
+    });
+  };
 
   const loadDriverData = async () => {
     try {
@@ -100,6 +190,24 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
       if (data.driverId === driverProfile?.id || data.driverUserId === currentUser.id) {
         setIncomingOffer(data);
         setOfferCountdown(20);
+
+        // TRIGGER VOICE ALERT & CHIME
+        if (voiceAlertsEnabled) {
+          playChimeSound();
+          setTimeout(() => speakVoiceAlert(data), 200);
+        }
+      }
+    };
+
+    // Global broadcast fallback for testing
+    const handleGlobalBroadcast = (data: any) => {
+      if (!activeTrip && isOnline) {
+        setIncomingOffer(data);
+        setOfferCountdown(20);
+        if (voiceAlertsEnabled) {
+          playChimeSound();
+          setTimeout(() => speakVoiceAlert(data), 200);
+        }
       }
     };
 
@@ -134,6 +242,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
     };
 
     socket.on('incoming_ride_offer', handleIncomingOffer);
+    socket.on('incoming_ride_offer_broadcast', handleGlobalBroadcast);
     socket.on('booking_status_changed', handleBookingStatusChanged);
     socket.on('incoming_call', handleIncomingCall);
     socket.on('call_connected', handleCallConnected);
@@ -154,7 +263,6 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
             });
           },
           () => {
-            // Simulated position in central Kerala
             socket.emit('driver_location_update', {
               driverId: driverProfile.id,
               lat: 10.5276 + (Math.random() - 0.5) * 0.005,
@@ -170,13 +278,14 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
     return () => {
       clearInterval(telematicsInterval);
       socket.off('incoming_ride_offer', handleIncomingOffer);
+      socket.off('incoming_ride_offer_broadcast', handleGlobalBroadcast);
       socket.off('booking_status_changed', handleBookingStatusChanged);
       socket.off('incoming_call', handleIncomingCall);
       socket.off('call_connected', handleCallConnected);
       socket.off('call_declined', handleCallDeclined);
       socket.off('call_ended', handleCallEnded);
     };
-  }, [currentUser.id, isOnline, driverProfile?.id, activeTrip?.id]);
+  }, [currentUser.id, isOnline, driverProfile?.id, activeTrip?.id, voiceAlertsEnabled]);
 
   // Countdown timer for incoming offer
   useEffect(() => {
@@ -207,6 +316,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
 
   const handleAcceptOffer = async () => {
     if (!incomingOffer || !driverProfile?.id) return;
+    window.speechSynthesis?.cancel();
     try {
       const res = await api.driverRespondBooking(incomingOffer.bookingId, driverProfile.id, 'ACCEPT');
       setActiveTrip(res.booking);
@@ -219,6 +329,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
 
   const handleDeclineOffer = async () => {
     if (!incomingOffer || !driverProfile?.id) return;
+    window.speechSynthesis?.cancel();
     try {
       await api.driverRespondBooking(incomingOffer.bookingId, driverProfile.id, 'REJECT', 'Driver busy');
       setIncomingOffer(null);
@@ -362,26 +473,53 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
           </div>
         </div>
 
-        {/* Big Online Toggle Switch */}
-        <div className="flex items-center space-x-3">
+        {/* Action Controls: Voice Alert Toggle, Test Voice, Pricing & Online Switch */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          
+          {/* Voice Alert Toggle */}
+          <button
+            onClick={() => setVoiceAlertsEnabled(!voiceAlertsEnabled)}
+            className={`flex items-center space-x-1.5 px-3 py-2 rounded-2xl text-xs font-bold transition-all border ${
+              voiceAlertsEnabled
+                ? 'bg-emerald-950/70 border-emerald-700 text-emerald-400'
+                : 'bg-slate-800 border-slate-700 text-slate-400'
+            }`}
+            title="Toggle Voice Alerts for incoming booking offers"
+          >
+            {voiceAlertsEnabled ? <Volume2 className="w-4 h-4 text-emerald-400" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
+            <span>{voiceAlertsEnabled ? 'Voice Alert: ON' : 'Voice Alert: OFF'}</span>
+          </button>
+
+          {/* Test Voice Button */}
+          <button
+            onClick={testVoiceAlert}
+            className="flex items-center space-x-1 px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-2xl text-xs font-bold text-slate-300 border border-slate-700 transition-colors"
+            title="Test Text-to-Speech Voice Announcement"
+          >
+            <Radio className="w-3.5 h-3.5 text-brand-400 animate-pulse" />
+            <span>Test Voice</span>
+          </button>
+
+          {/* Custom Pricing */}
           <button
             onClick={() => setShowPricingModal(true)}
             className="flex items-center space-x-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-2xl text-xs font-bold text-slate-200 transition-colors border border-slate-700"
           >
             <Sliders className="w-4 h-4 text-brand-400" />
-            <span>{t('driver_pricing', language)}</span>
+            <span>Pricing</span>
           </button>
 
+          {/* Big Online / Offline Button */}
           <button
             onClick={handleToggleOnline}
-            className={`flex items-center space-x-2 px-5 py-3 rounded-2xl font-extrabold text-sm shadow-lg transition-all ${
+            className={`flex items-center space-x-2 px-5 py-2.5 rounded-2xl font-extrabold text-sm shadow-lg transition-all ${
               isOnline
                 ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/30'
                 : 'bg-slate-700 hover:bg-slate-800 text-white'
             }`}
           >
-            <Power className="w-5 h-5" />
-            <span>{isOnline ? t('go_offline', language) : t('go_online', language)}</span>
+            <Power className="w-4 h-4" />
+            <span>{isOnline ? 'ONLINE' : 'OFFLINE'}</span>
           </button>
         </div>
       </div>
@@ -389,7 +527,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
       {/* KPI Cards: Earnings & Acceptance */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
         <div className="p-4 bg-slate-900 rounded-3xl border border-slate-800 shadow-sm">
-          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">{t('earnings_today', language)}</p>
+          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Today's Earnings</p>
           <p className="text-2xl font-extrabold text-emerald-400 mt-1">₹{earnings.todayEarnings}</p>
           <p className="text-[10px] text-slate-400 mt-0.5">Net take-home payout</p>
         </div>
@@ -539,7 +677,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
               </h3>
               <p className="text-xs text-slate-400 max-w-sm mx-auto">
                 {isOnline
-                  ? 'Your GPS telematics is live. When a passenger books nearby or requests you as a favorite, an offer HUD will trigger.'
+                  ? 'Your GPS telematics is live. When a passenger books nearby, a voice alert and offer HUD will trigger.'
                   : 'Turn on the switch at the top to start receiving passenger bookings.'}
               </p>
             </div>
@@ -565,11 +703,17 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
 
       </div>
 
-      {/* Incoming Ride Request Modal (with 20s Countdown) */}
+      {/* Incoming Ride Request Modal (with Voice Alert & 20s Countdown) */}
       {incomingOffer && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in zoom-in-95">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in zoom-in-95">
           <div className="w-full max-w-md bg-slate-900 rounded-3xl p-6 shadow-2xl border-2 border-brand-500 space-y-4 text-center">
             
+            {/* Top Voice Alert Badge */}
+            <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-700 rounded-full text-[11px] font-bold text-emerald-400 mx-auto">
+              <Volume2 className="w-3.5 h-3.5 animate-bounce" />
+              <span>Voice Alert Active • Announcing Offer</span>
+            </div>
+
             <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-30"></span>
               <div className="relative w-14 h-14 rounded-full bg-brand-600 text-white flex items-center justify-center font-extrabold text-xl shadow-md">
@@ -581,17 +725,17 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
               <span className="text-xs font-bold text-brand-400 uppercase tracking-wider">
                 {incomingOffer.isFavoriteRequest ? '⭐ Favorite Driver Request' : 'New Ride Booking Offer'}
               </span>
-              <h3 className="text-2xl font-black text-white">
+              <h3 className="text-3xl font-black text-white">
                 ₹{incomingOffer.fareEstimate || incomingOffer.fare}
               </h3>
               <p className="text-xs text-slate-400">
-                {incomingOffer.pickupDistanceKm || '1.2'} km away • {incomingOffer.vehicleCategoryName || 'Sedan'}
+                Passenger: <span className="font-bold text-white">{incomingOffer.passengerName}</span> • {incomingOffer.distanceKm || '4.2'} km
               </p>
             </div>
 
             <div className="p-3.5 bg-slate-950 rounded-2xl text-xs space-y-2 text-left border border-slate-800">
               <div>
-                <p className="text-[10px] text-slate-500 font-bold uppercase">Pickup</p>
+                <p className="text-[10px] text-slate-500 font-bold uppercase">Pickup Location</p>
                 <p className="font-semibold text-white truncate">{incomingOffer.pickupAddress}</p>
               </div>
               <div>

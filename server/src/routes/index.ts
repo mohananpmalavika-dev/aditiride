@@ -407,6 +407,32 @@ apiRouter.post('/bookings', async (req: Request, res: Response) => {
     WHERE b.id = ?
   `, [bookingId]);
 
+  // Broadcast real-time voice & offer alert to matched driver
+  const io = (req as any).io;
+  if (io && nearbyDrivers.length > 0 && created) {
+    const targetDriver = nearbyDrivers[0];
+    const offerPayload = {
+      bookingId: created.id,
+      bookingNumber: created.booking_number,
+      driverId: targetDriver.driverId,
+      driverUserId: targetDriver.userId,
+      passengerId: passengerId,
+      passengerName: created.passenger_name || 'Passenger',
+      pickupAddress: created.pickup_address,
+      destinationAddress: created.destination_address,
+      fareEstimate: created.fare_estimate,
+      distanceKm: created.distance_km,
+      durationMin: created.duration_min,
+      vehicleCategoryId: created.vehicle_category_id,
+      vehicleCategoryName: created.vehicle_category_name,
+      isFavoriteRequest: !!preferredDriverId
+    };
+
+    io.to(`user_${targetDriver.userId}`).emit('incoming_ride_offer', offerPayload);
+    io.to(`driver_${targetDriver.driverId}`).emit('incoming_ride_offer', offerPayload);
+    io.emit('incoming_ride_offer_broadcast', offerPayload);
+  }
+
   res.status(201).json({
     booking: created,
     route,
