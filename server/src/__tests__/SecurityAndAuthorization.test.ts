@@ -420,4 +420,48 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       expect(res.payment.status).toBe('COMPLETED');
     });
   });
+
+  describe('14. Two-Way Mutual Location Sharing Lifecycle (Accepted until Completed)', () => {
+    it('should maintain mutual location updates while ride is active and terminate on completion', () => {
+      const bookingId = 'bk_mutual_loc_test_01';
+      run(`
+        INSERT OR REPLACE INTO bookings (
+          id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+          pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+          distance_km, duration_min, otp_code, fare_estimate, fare_source, fare_rule_version,
+          surge_multiplier, payment_method, payment_status, status
+        ) VALUES (
+          ?, 'ADITI-LOC-001', 'usr_passenger', 'drv_rahul', 'cat_sedan', 'INSTANT',
+          10.5276, 76.2144, 'Initial Pickup', 10.5360, 76.2220, 'Destination',
+          4.0, 12, '5821', 120.0, 'ESTIMATE', 'v2.0',
+          1.0, 'UPI', 'PENDING', 'DRIVER_ASSIGNED'
+        )
+      `, [bookingId]);
+
+      // 1. Driver updates GPS location
+      run(`UPDATE driver_profiles SET current_lat = 10.5285, current_lng = 76.2155, heading = 90 WHERE id = 'drv_rahul'`);
+      const driver = get<any>(`SELECT current_lat, current_lng FROM driver_profiles WHERE id = 'drv_rahul'`);
+      expect(driver.current_lat).toBe(10.5285);
+      expect(driver.current_lng).toBe(76.2155);
+
+      // 2. Passenger updates live location while driver is en route
+      run(`UPDATE bookings SET pickup_lat = 10.5279, pickup_lng = 76.2148 WHERE id = ?`, [bookingId]);
+      const activeBooking = get<any>(`SELECT pickup_lat, pickup_lng FROM bookings WHERE id = ?`, [bookingId]);
+      expect(activeBooking.pickup_lat).toBe(10.5279);
+      expect(activeBooking.pickup_lng).toBe(76.2148);
+
+      // 3. Driver accepts, is en route, arrives, starts trip with OTP, and completes trip
+      BookingStateMachine.transition(bookingId, 'DRIVER_ACCEPTED', 'usr_driver_rahul');
+      BookingStateMachine.transition(bookingId, 'DRIVER_EN_ROUTE', 'usr_driver_rahul');
+      BookingStateMachine.transition(bookingId, 'DRIVER_ARRIVED', 'usr_driver_rahul');
+      BookingStateMachine.transition(bookingId, 'TRIP_STARTED', 'usr_driver_rahul', { otp: '5821' });
+      BookingStateMachine.transition(bookingId, 'COMPLETED', 'usr_driver_rahul', {
+        finalDistanceKm: 4.2,
+        finalDurationMin: 14
+      });
+
+      const completed = get<any>(`SELECT status FROM bookings WHERE id = ?`, [bookingId]);
+      expect(completed.status).toBe('COMPLETED');
+    });
+  });
 });

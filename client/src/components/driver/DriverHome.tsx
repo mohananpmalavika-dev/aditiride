@@ -61,6 +61,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   const [proximityDistanceMeters, setProximityDistanceMeters] = useState<number | null>(null);
   const [showCameraScanner, setShowCameraScanner] = useState(false);
   const [scannerStatus, setScannerStatus] = useState<string>('');
+  const [passengerLiveLocation, setPassengerLiveLocation] = useState<{ lat: number; lng: number; heading?: number; name?: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Driver Custom Pricing Studio & Pickup Distance Policy
@@ -379,9 +380,22 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
       setTimeout(() => setShowCallModal(false), 1000);
     };
 
+    // Mutual Two-Way Location Sharing: Listen for Passenger Live Movement
+    const handlePassengerMoved = (data: { bookingId: string; passengerId: string; passengerName?: string; lat: number; lng: number; heading?: number }) => {
+      if (activeTrip && data.bookingId === activeTrip.id) {
+        setPassengerLiveLocation({
+          lat: data.lat,
+          lng: data.lng,
+          heading: data.heading,
+          name: data.passengerName || activeTrip.passenger_name
+        });
+      }
+    };
+
     socket.on('incoming_ride_offer', handleIncomingOffer);
     socket.on('incoming_ride_offer_broadcast', handleGlobalBroadcast);
     socket.on('booking_status_changed', handleBookingStatusChanged);
+    socket.on('passenger_moved', handlePassengerMoved);
     socket.on('incoming_call', handleIncomingCall);
     socket.on('call_connected', handleCallConnected);
     socket.on('call_declined', handleCallDeclined);
@@ -411,13 +425,14 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
           }
         );
       }
-    }, 5000);
+    }, 4000);
 
     return () => {
       clearInterval(telematicsInterval);
       socket.off('incoming_ride_offer', handleIncomingOffer);
       socket.off('incoming_ride_offer_broadcast', handleGlobalBroadcast);
       socket.off('booking_status_changed', handleBookingStatusChanged);
+      socket.off('passenger_moved', handlePassengerMoved);
       socket.off('incoming_call', handleIncomingCall);
       socket.off('call_connected', handleCallConnected);
       socket.off('call_declined', handleCallDeclined);
@@ -868,7 +883,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
         {/* Right Live Navigation Map */}
         <div className="lg:col-span-6 h-[500px] lg:h-[650px] rounded-3xl overflow-hidden shadow-lg border border-slate-800 relative">
           <OpenStreetMap
-            center={{ lat: 10.5276, lng: 76.2144 }}
+            center={{ lat: activeTrip?.pickup_lat || 10.5276, lng: activeTrip?.pickup_lng || 76.2144 }}
             pickup={activeTrip ? { lat: activeTrip.pickup_lat, lng: activeTrip.pickup_lng, address: activeTrip.pickup_address } : undefined}
             destination={activeTrip ? { lat: activeTrip.destination_lat, lng: activeTrip.destination_lng, address: activeTrip.destination_address } : undefined}
             activeDriver={{
@@ -877,8 +892,29 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
               heading: 45,
               name: currentUser.name
             }}
+            passengerLiveLocation={
+              passengerLiveLocation
+                ? passengerLiveLocation
+                : activeTrip
+                ? {
+                    lat: activeTrip.pickup_lat,
+                    lng: activeTrip.pickup_lng,
+                    name: activeTrip.passenger_name
+                  }
+                : undefined
+            }
             className="w-full h-full"
           />
+
+          {/* Mutual Two-Way Realtime Sharing Indicator */}
+          {activeTrip && (
+            <div className="absolute top-4 right-4 z-[400] bg-slate-900/90 text-white backdrop-blur-md px-3.5 py-1.5 rounded-full shadow-lg border border-emerald-500/50 flex items-center space-x-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+              <span className="text-[11px] font-extrabold text-emerald-400">
+                {passengerLiveLocation ? '📡 Passenger Live GPS Connected' : '📍 Pickup Coordinate Tracked'}
+              </span>
+            </div>
+          )}
         </div>
 
       </div>

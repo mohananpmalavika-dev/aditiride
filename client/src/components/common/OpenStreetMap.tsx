@@ -12,6 +12,7 @@ interface OpenStreetMapProps {
   routePolyline?: [number, number][];
   drivers?: MatchedDriver[];
   activeDriver?: { lat: number; lng: number; heading?: number; name?: string; vehicleType?: string };
+  passengerLiveLocation?: { lat: number; lng: number; heading?: number; name?: string };
   className?: string;
   onMapClick?: (lat: number, lng: number) => void;
 }
@@ -55,6 +56,7 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
   routePolyline = [],
   drivers = [],
   activeDriver,
+  passengerLiveLocation,
   className = 'w-full h-full min-h-[420px] rounded-3xl',
   onMapClick
 }) => {
@@ -226,8 +228,27 @@ export const OpenStreetMap: React.FC<OpenStreetMapProps> = ({
         .bindPopup(`<b>${activeDriver.name || 'Captain'}</b>`)
         .addTo(group);
       boundsPoints.push([activeDriver.lat, activeDriver.lng]);
-    } else if (drivers && drivers.length > 0) {
-      // 5. Nearby Drivers Markers
+    }
+
+    // 5. Passenger Live Real-Time Location Marker (Mutual Sharing)
+    if (passengerLiveLocation && passengerLiveLocation.lat && passengerLiveLocation.lng) {
+      const passengerIcon = createCustomIcon(`
+        <div style="position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer;">
+          <div style="position: absolute; width: 44px; height: 44px; border-radius: 9999px; background-color: #3b82f6; opacity: 0.4; animation: ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>
+          <div style="position: relative; width: 36px; height: 36px; border-radius: 9999px; background-color: #2563eb; border: 3px solid white; box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center; color: white; font-size: 16px;">
+            🚶
+          </div>
+          <span style="margin-top: 2px; font-size: 10px; font-weight: 800; color: #ffffff; background-color: #1e3a8a; padding: 1px 6px; border-radius: 6px; border: 1px solid #3b82f6; box-shadow: 0 2px 6px rgba(0,0,0,0.3); white-space: nowrap;">
+            ${passengerLiveLocation.name ? passengerLiveLocation.name.split(' ')[0] : 'Passenger'} Live
+          </span>
+        </div>
+      `, [44, 56]);
+      L.marker([passengerLiveLocation.lat, passengerLiveLocation.lng], { icon: passengerIcon })
+        .bindPopup(`<b>🚶 ${passengerLiveLocation.name || 'Passenger'} Live Location</b>`)
+        .addTo(group);
+      boundsPoints.push([passengerLiveLocation.lat, passengerLiveLocation.lng]);
+    } else if (drivers && drivers.length > 0 && !activeDriver) {
+      // 6. Nearby Drivers Markers
       drivers.forEach(d => {
         const vehicleEmoji = d.vehicleCategoryId === 'cat_bike' ? '🏍️' : d.vehicleCategoryId === 'cat_auto' ? '🛺' : '🚗';
         const dIcon = createCustomIcon(`

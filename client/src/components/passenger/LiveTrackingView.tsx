@@ -43,6 +43,7 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
   const [booking, setBooking] = useState<Booking | null>(null);
   const [routePolyline, setRoutePolyline] = useState<[number, number][]>([]);
   const [driverLocation, setDriverLocation] = useState<{ lat: number; lng: number; heading?: number } | null>(null);
+  const [passengerLocation, setPassengerLocation] = useState<{ lat: number; lng: number } | null>(null);
   const hasAnnouncedArrivalRef = useRef(false);
 
   // In-App Chat & VoIP Call Modals
@@ -182,6 +183,36 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
     socket.on('call_declined', handleCallDeclined);
     socket.on('call_ended', handleCallEnded);
 
+    // Mutual Two-Way Real-Time Location Sharing: Stream passenger GPS position to driver
+    let watchId: number | null = null;
+    if (navigator.geolocation) {
+      watchId = navigator.geolocation.watchPosition(
+        pos => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const heading = pos.coords.heading || 0;
+          const accuracy = pos.coords.accuracy || 10;
+          const speed = pos.coords.speed || 0;
+
+          setPassengerLocation({ lat, lng });
+
+          // Emit live position to driver and booking room
+          socket.emit('passenger_location_update', {
+            bookingId,
+            lat,
+            lng,
+            heading,
+            accuracy,
+            speed
+          });
+        },
+        err => {
+          console.warn('Passenger GPS watch notification:', err);
+        },
+        { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+      );
+    }
+
     // Fallback polling only when socket is disconnected
     const interval = setInterval(() => {
       if (!socket.connected) {
@@ -190,6 +221,9 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
     }, 10000);
 
     return () => {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+      }
       clearInterval(interval);
       socket.off('driver_moved', handleDriverMoved);
       socket.off('booking_status_changed', handleStatusChanged);
@@ -431,8 +465,23 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
                 }
               : undefined
           }
+          passengerLiveLocation={
+            passengerLocation
+              ? {
+                  lat: passengerLocation.lat,
+                  lng: passengerLocation.lng,
+                  name: currentUser.name
+                }
+              : undefined
+          }
           className="w-full h-full"
         />
+
+        {/* Mutual Two-Way Realtime Sharing Indicator */}
+        <div className="absolute top-4 right-4 z-[400] bg-slate-900/90 text-white backdrop-blur-md px-3 py-1.5 rounded-full shadow-lg border border-emerald-500/50 flex items-center space-x-2">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+          <span className="text-[11px] font-extrabold text-emerald-400">📡 Live Mutual GPS Active</span>
+        </div>
 
         {/* 4-Digit OTP & QR Code Floating Card */}
         {booking.status !== 'COMPLETED' && booking.status !== 'CANCELLED_BY_PASSENGER' && (

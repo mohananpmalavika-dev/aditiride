@@ -99,6 +99,65 @@ export function setupSocketHandlers(io: Server) {
       });
     });
 
+    // Passenger broadcasts live GPS location during accepted / active ride (Mutual Sharing)
+    socket.on('passenger_location_update', (data: { bookingId: string; lat: number; lng: number; heading?: number; accuracy?: number; speed?: number }) => {
+      if (!data.bookingId || data.lat === undefined || data.lng === undefined) {
+        return;
+      }
+
+      const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [data.bookingId]);
+      if (!booking) return;
+
+      // Ensure authenticated user is the actual passenger of this booking
+      if (booking.passenger_id !== authUser.id && authUser.role !== 'SUPER_ADMIN' && authUser.role !== 'ADMIN') {
+        return;
+      }
+
+      // Mutual sharing only occurs while trip is active / accepted until ride ends
+      const activeStatuses = ['DRIVER_ASSIGNED', 'DRIVER_ACCEPTED', 'DRIVER_EN_ROUTE', 'DRIVER_ARRIVED', 'TRIP_STARTED', 'TRIP_IN_PROGRESS'];
+      if (!activeStatuses.includes(booking.status)) {
+        return;
+      }
+
+      const lat = data.lat;
+      const lng = data.lng;
+      const heading = data.heading || 0;
+      const accuracy = data.accuracy || 10;
+
+      // Validate geographic bounds
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return;
+      }
+
+      // Update pickup coordinates in booking if driver hasn't started trip yet
+      if (['DRIVER_ASSIGNED', 'DRIVER_ACCEPTED', 'DRIVER_EN_ROUTE', 'DRIVER_ARRIVED'].includes(booking.status)) {
+        run(`UPDATE bookings SET pickup_lat = ?, pickup_lng = ? WHERE id = ?`, [lat, lng, data.bookingId]);
+      }
+
+      const passengerPayload = {
+        bookingId: data.bookingId,
+        passengerId: authUser.id,
+        passengerName: authUser.name || 'Passenger',
+        lat,
+        lng,
+        heading,
+        accuracy,
+        speed: data.speed || 0,
+        updatedAt: new Date().toISOString()
+      };
+
+      // Broadcast to booking room (received by Driver)
+      io.to(`booking_${data.bookingId}`).emit('passenger_moved', passengerPayload);
+
+      // If driver is assigned, also send directly to driver user room
+      if (booking.driver_id) {
+        const driverProfile = get<{ user_id: string }>('SELECT user_id FROM driver_profiles WHERE id = ?', [booking.driver_id]);
+        if (driverProfile?.user_id) {
+          io.to(`user_${driverProfile.user_id}`).emit('passenger_moved', passengerPayload);
+        }
+      }
+    });
+
     // In-trip Passenger <-> Driver Chat with Strict Participant Authorization
     socket.on('send_chat_message', (data: { bookingId: string; message: string; receiverId?: string }) => {
       if (!data.bookingId || !data.message?.trim()) return;
