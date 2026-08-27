@@ -158,6 +158,35 @@ export class FareEngine {
   }
 
   /**
+   * Calculate fare estimates across all active categories in a single call
+   */
+  public static calculateMultiCategoryEstimates(
+    distanceKm: number,
+    durationMin: number,
+    pickupLat?: number,
+    pickupLng?: number,
+    driverId?: string
+  ): Record<string, FareQuote> {
+    const categories = query<VehicleCategory>('SELECT * FROM vehicle_categories WHERE active = 1 ORDER BY sort_order ASC');
+    const quotes: Record<string, FareQuote> = {};
+
+    for (const cat of categories) {
+      try {
+        quotes[cat.id] = this.calculateFare({
+          vehicleCategoryId: cat.id,
+          distanceKm,
+          durationMin,
+          pickupLat,
+          pickupLng,
+          driverId
+        });
+      } catch (e) {}
+    }
+
+    return quotes;
+  }
+
+  /**
    * Validate driver custom pricing against admin allowable bounds
    */
   public static validateDriverPricing(categoryId: string, customPerKm: number, customBaseFare?: number): { valid: boolean; minAllowed: number; maxAllowed: number; message?: string } {

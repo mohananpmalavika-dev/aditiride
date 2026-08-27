@@ -9,7 +9,24 @@ import { BookingStateMachine } from '../services/BookingStateMachine.js';
 import { PaymentService } from '../services/PaymentService.js';
 import { SafetyService } from '../services/SafetyService.js';
 import { AdminService } from '../services/AdminService.js';
-import { Booking, DriverProfile, User, VehicleCategory, FavoriteRelationship, UserBlock, ScheduledBooking } from '../types/index.js';
+import {
+  authenticateToken,
+  optionalAuth,
+  requireRole,
+  generateToken,
+  comparePassword,
+  hashPassword,
+  AuthenticatedRequest
+} from '../middleware/auth.js';
+import {
+  Booking,
+  DriverProfile,
+  User,
+  VehicleCategory,
+  FavoriteRelationship,
+  UserBlock,
+  ScheduledBooking
+} from '../types/index.js';
 
 export const apiRouter = Router();
 
@@ -17,8 +34,8 @@ export const apiRouter = Router();
 // 1. AUTHENTICATION & USERS
 // ==========================================
 apiRouter.post('/auth/login', (req: Request, res: Response) => {
-  const { identifier, password } = req.body; // email, phone, username, or userId
-  
+  const { identifier, password } = req.body;
+
   if (!identifier) {
     return res.status(400).json({ error: 'Please enter your username, email, or phone number' });
   }
@@ -32,14 +49,15 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Account not found. Please check your credentials or register.' });
   }
 
-  // Password verification
+  // Authoritative Password Verification via bcrypt
   if (password && user.password_hash) {
-    if (password !== user.password_hash && user.password_hash !== 'Thathu@110' && user.password_hash !== 'demo_hash_aditi123') {
+    const isMatch = comparePassword(password, user.password_hash);
+    if (!isMatch) {
       return res.status(401).json({ error: 'Incorrect password. Please try again.' });
     }
   }
 
-  // Fetch role-specific details
+  // Fetch role-specific profile details
   let roleData: any = {};
   if (user.role === 'PASSENGER') {
     roleData = get('SELECT * FROM passenger_profiles WHERE user_id = ?', [user.id]);
@@ -52,10 +70,13 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
     `, [user.id]);
   }
 
+  // Generate cryptographically signed JWT token
+  const token = generateToken(user);
+
   res.json({
     user,
     roleData,
-    token: `jwt_token_${user.id}_${Date.now()}`
+    token
   });
 });
 
@@ -68,14 +89,10 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
     password,
     role,
     preferredLanguage,
-    // Driver fields
     vehicleCategoryId,
     vehicleBrand,
     vehicleModel,
-    vehiclePlate,
-    licenseNumber,
-    // Fleet fields
-    companyName
+    vehiclePlate
   } = req.body;
 
   if (!phone || !name) {
@@ -96,13 +113,13 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
 
   const userId = `usr_${uuidv4().substring(0, 8)}`;
   const userRole = role || 'PASSENGER';
-  const userPassword = password || 'Thathu@110';
+  const hashedPassword = hashPassword(password || 'Thathu@110');
   const userEmail = email || `${username || phone}@aditiride.com`;
 
   run(`
     INSERT INTO users (id, username, phone, email, name, role, password_hash, preferred_language, status)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-  `, [userId, username || null, phone, userEmail, name, userRole, userPassword, preferredLanguage || 'en']);
+  `, [userId, username || null, phone, userEmail, name, userRole, hashedPassword, preferredLanguage || 'en']);
 
   if (userRole === 'PASSENGER') {
     run(`
@@ -125,7 +142,6 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
       ) VALUES (?, ?, 'VERIFIED', 'ONLINE', 10.5276, 76.2144, 0, 5.0, 1.0, 0.0, 0, 1, 1)
     `, [driverProfileId, userId]);
 
-    // Create Vehicle
     const vehicleId = `veh_${uuidv4().substring(0, 8)}`;
     run(`
       INSERT INTO vehicles (
@@ -140,21 +156,39 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
       vehiclePlate || `KL-08-${Math.floor(1000 + Math.random() * 9000)}`
     ]);
 
-    // Create initial custom pricing
     run(`
       INSERT INTO driver_pricing (
         id, driver_id, vehicle_category_id, custom_base_fare, custom_per_km, custom_per_minute, custom_waiting_rate, custom_minimum_fare
       ) VALUES (?, ?, ?, 40.0, 14.0, 2.0, 2.0, 50.0)
     `, [uuidv4(), driverProfileId, categoryId]);
-  } else if (userRole === 'FLEET_MANAGER') {
-    // Fleet manager user profile setup
   }
 
   const createdUser = get<User>('SELECT * FROM users WHERE id = ?', [userId]);
-  res.status(201).json({ user: createdUser, token: `jwt_token_${userId}_${Date.now()}` });
+  const token = generateToken(createdUser!);
+  res.status(201).json({ user: createdUser, token });
 });
 
-apiRouter.get('/auth/users', (_req: Request, res: Response) => {
+apiRouter.get('/auth/me', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const user = get<User>('SELECT id, username, phone, email, name, role, avatar_url, preferred_language, status FROM users WHERE id = ?', [authReq.user.id]);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  let roleData: any = {};
+  if (user.role === 'PASSENGER') {
+    roleData = get('SELECT * FROM passenger_profiles WHERE user_id = ?', [user.id]);
+  } else if (user.role === 'DRIVER') {
+    roleData = get(`
+      SELECT d.*, v.id as vehicle_id, v.brand as vehicle_brand, v.model as vehicle_model, v.plate_number as vehicle_plate, v.vehicle_category_id
+      FROM driver_profiles d
+      LEFT JOIN vehicles v ON v.driver_id = d.id
+      WHERE d.user_id = ?
+    `, [user.id]);
+  }
+
+  res.json({ user, roleData });
+});
+
+apiRouter.get('/auth/users', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
   const users = query<User>('SELECT id, phone, email, name, role, avatar_url, preferred_language, status FROM users');
   res.json({ users });
 });
@@ -167,7 +201,7 @@ apiRouter.get('/categories', (_req: Request, res: Response) => {
   res.json({ categories });
 });
 
-apiRouter.put('/categories/:id', (req: Request, res: Response) => {
+apiRouter.put('/categories/:id', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (req: Request, res: Response) => {
   const { id } = req.params;
   const updates = req.body;
   
@@ -206,8 +240,13 @@ apiRouter.get('/location/search', async (req: Request, res: Response) => {
 });
 
 apiRouter.get('/location/reverse', async (req: Request, res: Response) => {
-  const lat = parseFloat(req.query.lat as string) || 10.5276;
-  const lng = parseFloat(req.query.lng as string) || 76.2144;
+  const lat = parseFloat(req.query.lat as string);
+  const lng = parseFloat(req.query.lng as string);
+
+  if (isNaN(lat) || isNaN(lng)) {
+    return res.status(400).json({ error: 'Valid latitude and longitude are required' });
+  }
+
   const address = await LocationService.reverseGeocode(lat, lng);
   res.json({ address, lat, lng });
 });
@@ -250,61 +289,46 @@ apiRouter.post('/fare/all-estimates', async (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Origin and Destination are required' });
   }
 
-  const route = await LocationService.calculateRoute(origin, destination);
-  const categories = query<VehicleCategory>('SELECT * FROM vehicle_categories WHERE active = 1 ORDER BY sort_order ASC');
+  try {
+    const route = await LocationService.calculateRoute(origin, destination);
+    const quotes = FareEngine.calculateMultiCategoryEstimates(
+      route.distanceKm,
+      route.durationMin,
+      origin.lat,
+      origin.lng,
+      driverId
+    );
 
-  const quotes = categories.map(cat => {
-    return {
-      category: cat,
-      quote: FareEngine.calculateFare({
-        vehicleCategoryId: cat.id,
-        distanceKm: route.distanceKm,
-        durationMin: route.durationMin,
-        pickupLat: origin.lat,
-        pickupLng: origin.lng,
-        driverId
-      })
-    };
-  });
-
-  res.json({ route, quotes });
-});
-
-apiRouter.post('/fare/validate-driver-pricing', (req: Request, res: Response) => {
-  const { categoryId, customPerKm, customBaseFare } = req.body;
-  const result = FareEngine.validateDriverPricing(categoryId, customPerKm, customBaseFare);
-  res.json(result);
+    res.json({
+      route,
+      quotes
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // ==========================================
-// 5. MATCHING ENGINE & FAVORITES
+// 5. DRIVER DISPATCH & NEARBY MATCHING
 // ==========================================
-apiRouter.get('/matching/nearby-drivers', (req: Request, res: Response) => {
-  const passengerUserId = (req.query.passengerUserId as string) || 'usr_passenger';
-  const pickupLat = parseFloat(req.query.lat as string) || 10.5276;
-  const pickupLng = parseFloat(req.query.lng as string) || 76.2144;
-  const vehicleCategoryId = (req.query.vehicleCategoryId as string) || 'cat_auto';
-  const preferredDriverId = req.query.preferredDriverId as string;
+apiRouter.get('/drivers/nearby', optionalAuth, (req: Request, res: Response) => {
+  const lat = parseFloat(req.query.lat as string) || 10.5276;
+  const lng = parseFloat(req.query.lng as string) || 76.2144;
+  const categoryId = (req.query.categoryId as string) || 'cat_auto';
+  const passengerId = (req as AuthenticatedRequest).user?.id || (req.query.passengerId as string) || 'usr_passenger';
 
-  const drivers = MatchingEngine.findNearbyDrivers(
-    passengerUserId,
-    pickupLat,
-    pickupLng,
-    vehicleCategoryId,
-    10.0,
-    preferredDriverId
-  );
-
+  const drivers = MatchingEngine.findNearbyDrivers(passengerId, lat, lng, categoryId, 10.0);
   res.json({ drivers });
 });
 
 // ==========================================
-// 6. BOOKINGS & TRIP LIFECYCLE
+// 6. BOOKINGS & TRIP LIFECYCLE (Zero-Trust)
 // ==========================================
-apiRouter.post('/bookings', async (req: Request, res: Response) => {
-  const idempotencyKey = req.headers['idempotency-key'] as string;
+apiRouter.post('/bookings', authenticateToken, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const passengerId = authReq.user.id; // Enforce authenticated identity
+
   const {
-    passengerId,
     vehicleCategoryId,
     pickupLat,
     pickupLng,
@@ -312,22 +336,22 @@ apiRouter.post('/bookings', async (req: Request, res: Response) => {
     destinationLat,
     destinationLng,
     destinationAddress,
-    preferredDriverId,
-    paymentMethod,
     bookingType,
     scheduledAt,
-    stops
+    paymentMethod,
+    stops,
+    preferredDriverId
   } = req.body;
 
-  if (!passengerId || !vehicleCategoryId || !pickupAddress || !destinationAddress) {
-    return res.status(400).json({ error: 'Missing required booking parameters' });
+  if (!pickupLat || !pickupLng || !destinationLat || !destinationLng) {
+    return res.status(400).json({ error: 'Pickup and Destination coordinates are required' });
   }
 
-  // Calculate route and authoritative fare
+  // Calculate real OSRM road route & authoritative price quote
   const route = await LocationService.calculateRoute(
     { lat: pickupLat, lng: pickupLng },
     { lat: destinationLat, lng: destinationLng },
-    stops ? stops.map((s: any) => ({ lat: s.lat, lng: s.lng })) : []
+    stops || []
   );
 
   const quote = FareEngine.calculateFare({
@@ -344,7 +368,6 @@ apiRouter.post('/bookings', async (req: Request, res: Response) => {
   const bookingNumber = `ADITI-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
   const otpCode = SafetyService.generateTripOtp();
 
-  // Find candidate driver
   let candidateDriverId: string | null = null;
   const nearbyDrivers = MatchingEngine.findNearbyDrivers(
     passengerId,
@@ -441,8 +464,8 @@ apiRouter.post('/bookings', async (req: Request, res: Response) => {
   });
 });
 
-apiRouter.get('/bookings/recent', (req: Request, res: Response) => {
-  const passengerId = (req.query.passengerId as string) || 'usr_passenger';
+apiRouter.get('/bookings/recent', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
   const recent = query<Booking>(`
     SELECT 
       b.*,
@@ -454,15 +477,16 @@ apiRouter.get('/bookings/recent', (req: Request, res: Response) => {
     LEFT JOIN users du ON d.user_id = du.id
     WHERE b.passenger_id = ?
     ORDER BY b.created_at DESC
-    LIMIT 5
-  `, [passengerId]);
+    LIMIT 20
+  `, [authReq.user.id]);
 
-  res.json({ recent });
+  res.json({ bookings: recent });
 });
 
-apiRouter.get('/bookings/active', (req: Request, res: Response) => {
-  const userId = req.query.userId as string;
-  const role = req.query.role as string;
+apiRouter.get('/bookings/active', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const userId = authReq.user.id;
+  const role = authReq.user.role;
 
   let activeBooking: Booking | undefined;
   if (role === 'DRIVER') {
@@ -470,43 +494,36 @@ apiRouter.get('/bookings/active', (req: Request, res: Response) => {
       SELECT 
         b.*,
         pu.name as passenger_name, pu.phone as passenger_phone, pu.avatar_url as passenger_avatar,
-        du.name as driver_name, du.phone as driver_phone,
-        d.current_lat as driver_lat, d.current_lng as driver_lng,
-        v.brand as vehicle_brand, v.model as vehicle_model, v.plate_number as vehicle_plate,
         vc.name as vehicle_category_name
       FROM bookings b
-      JOIN users pu ON b.passenger_id = pu.id
       JOIN driver_profiles d ON b.driver_id = d.id
-      JOIN users du ON d.user_id = du.id
-      JOIN vehicles v ON v.driver_id = d.id
+      JOIN users pu ON b.passenger_id = pu.id
       JOIN vehicle_categories vc ON b.vehicle_category_id = vc.id
-      WHERE du.id = ? AND b.status NOT IN ('COMPLETED', 'CANCELLED_BY_PASSENGER', 'CANCELLED_BY_DRIVER', 'EXPIRED', 'NO_DRIVER')
+      WHERE d.user_id = ? AND b.status NOT IN ('COMPLETED', 'CANCELLED_BY_PASSENGER', 'CANCELLED_BY_DRIVER', 'EXPIRED', 'NO_DRIVER')
       ORDER BY b.created_at DESC LIMIT 1
     `, [userId]);
   } else {
     activeBooking = get<Booking>(`
       SELECT 
         b.*,
-        pu.name as passenger_name, pu.phone as passenger_phone,
         du.name as driver_name, du.phone as driver_phone, du.avatar_url as driver_avatar,
         d.current_lat as driver_lat, d.current_lng as driver_lng, d.heading as driver_heading, d.rating_avg as driver_rating,
         v.brand as vehicle_brand, v.model as vehicle_model, v.color as vehicle_color, v.plate_number as vehicle_plate,
         vc.name as vehicle_category_name
       FROM bookings b
-      JOIN users pu ON b.passenger_id = pu.id
       LEFT JOIN driver_profiles d ON b.driver_id = d.id
       LEFT JOIN users du ON d.user_id = du.id
       LEFT JOIN vehicles v ON v.driver_id = d.id
       JOIN vehicle_categories vc ON b.vehicle_category_id = vc.id
       WHERE b.passenger_id = ? AND b.status NOT IN ('COMPLETED', 'CANCELLED_BY_PASSENGER', 'CANCELLED_BY_DRIVER', 'EXPIRED', 'NO_DRIVER')
       ORDER BY b.created_at DESC LIMIT 1
-    `, [userId || 'usr_passenger']);
+    `, [userId]);
   }
 
   res.json({ activeBooking: activeBooking || null });
 });
 
-apiRouter.get('/bookings/:id', (req: Request, res: Response) => {
+apiRouter.get('/bookings/:id', authenticateToken, (req: Request, res: Response) => {
   const { id } = req.params;
   const booking = get<Booking>(`
     SELECT 
@@ -529,35 +546,43 @@ apiRouter.get('/bookings/:id', (req: Request, res: Response) => {
   res.json({ booking });
 });
 
-apiRouter.post('/bookings/:id/transition', (req: Request, res: Response) => {
+apiRouter.post('/bookings/:id/transition', authenticateToken, (req: Request, res: Response) => {
   const { id } = req.params;
-  const { status, triggeredByUserId, otp, cancellationReason, driverId, finalDistanceKm, finalDurationMin } = req.body;
+  const authReq = req as AuthenticatedRequest;
+  const { nextStatus, status, otp, cancellationReason, driverId, finalDistanceKm, finalDurationMin } = req.body;
+  const targetStatus = nextStatus || status;
 
   try {
-    const updated = BookingStateMachine.transition(id, status, triggeredByUserId, {
+    const updated = BookingStateMachine.transition(id, targetStatus, authReq.user.id, {
       otp,
       cancellationReason,
       driverId,
       finalDistanceKm,
       finalDurationMin
     });
+
+    const io = (req as any).io;
+    if (io) {
+      io.to(`booking_${id}`).emit('booking_status_changed', { bookingId: id, status: targetStatus, booking: updated });
+    }
+
     res.json({ booking: updated });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-apiRouter.post('/bookings/:id/rate', (req: Request, res: Response) => {
+apiRouter.post('/bookings/:id/rate', authenticateToken, (req: Request, res: Response) => {
   const { id } = req.params;
-  const { raterId, ratedUserId, rating, tags, comment, isSafetyReport } = req.body;
+  const authReq = req as AuthenticatedRequest;
+  const { ratedUserId, rating, tags, comment, isSafetyReport } = req.body;
 
   const ratingId = `rat_${uuidv4().substring(0, 8)}`;
   run(`
     INSERT INTO ratings (id, booking_id, rater_id, rated_user_id, rating, tags, comment, is_safety_report)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `, [ratingId, id, raterId, ratedUserId, rating, JSON.stringify(tags || []), comment || null, isSafetyReport ? 1 : 0]);
+  `, [ratingId, id, authReq.user.id, ratedUserId, rating, JSON.stringify(tags || []), comment || null, isSafetyReport ? 1 : 0]);
 
-  // Recalculate average rating for user
   const avgData = get<{ avg: number }>(`SELECT AVG(rating) as avg FROM ratings WHERE rated_user_id = ?`, [ratedUserId]);
   if (avgData && avgData.avg) {
     const rounded = Math.round(avgData.avg * 100) / 100;
@@ -571,7 +596,7 @@ apiRouter.post('/bookings/:id/rate', (req: Request, res: Response) => {
 // ==========================================
 // 7. VOICE BOOKING ENGINE
 // ==========================================
-apiRouter.post('/voice/intent', (req: Request, res: Response) => {
+apiRouter.post('/voice/intent', optionalAuth, (req: Request, res: Response) => {
   const { text, currentLat, currentLng, preferredLanguage } = req.body;
   if (!text) return res.status(400).json({ error: 'Text prompt is required' });
 
@@ -580,10 +605,12 @@ apiRouter.post('/voice/intent', (req: Request, res: Response) => {
 });
 
 // ==========================================
-// 8. FAVORITE DRIVERS & BLOCKING
+// 8. FAVORITE DRIVERS & BLOCKING (Zero-Trust IDOR Protection)
 // ==========================================
-apiRouter.get('/favorites/drivers', (req: Request, res: Response) => {
-  const passengerId = (req.query.passengerId as string) || 'usr_passenger';
+apiRouter.get('/favorites/drivers', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const passengerId = authReq.user.id; // Enforce authenticated user ID
+
   const favorites = query<any>(`
     SELECT 
       f.id as favorite_id, f.created_at, f.status,
@@ -602,9 +629,10 @@ apiRouter.get('/favorites/drivers', (req: Request, res: Response) => {
   res.json({ favorites });
 });
 
-apiRouter.post('/favorites/drivers/:driverId', (req: Request, res: Response) => {
+apiRouter.post('/favorites/drivers/:driverId', authenticateToken, (req: Request, res: Response) => {
   const { driverId } = req.params;
-  const { passengerId } = req.body;
+  const authReq = req as AuthenticatedRequest;
+  const passengerId = authReq.user.id;
 
   const existing = get('SELECT id FROM favorites WHERE passenger_id = ? AND driver_id = ?', [passengerId, driverId]);
   if (existing) {
@@ -618,27 +646,34 @@ apiRouter.post('/favorites/drivers/:driverId', (req: Request, res: Response) => 
   res.json({ success: true, message: 'Driver added to favorites' });
 });
 
-apiRouter.delete('/favorites/drivers/:driverId', (req: Request, res: Response) => {
+apiRouter.delete('/favorites/drivers/:driverId', authenticateToken, (req: Request, res: Response) => {
   const { driverId } = req.params;
-  const passengerId = req.query.passengerId as string;
+  const authReq = req as AuthenticatedRequest;
+  const passengerId = authReq.user.id;
+
   run(`UPDATE favorites SET status = 'INACTIVE' WHERE passenger_id = ? AND driver_id = ?`, [passengerId, driverId]);
   res.json({ success: true, message: 'Driver removed from favorites' });
 });
 
-apiRouter.get('/blocks', (req: Request, res: Response) => {
-  const userId = req.query.userId as string;
+apiRouter.get('/blocks', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const blockerUserId = authReq.user.id;
+
   const blocks = query<any>(`
     SELECT b.*, u.name as blocked_user_name, u.role as blocked_user_role
     FROM user_blocks b
     JOIN users u ON b.blocked_user_id = u.id
     WHERE b.blocker_user_id = ? AND b.status = 'ACTIVE'
-  `, [userId || 'usr_passenger']);
+  `, [blockerUserId]);
+
   res.json({ blocks });
 });
 
-apiRouter.post('/blocks/:userId', (req: Request, res: Response) => {
+apiRouter.post('/blocks/:userId', authenticateToken, (req: Request, res: Response) => {
   const { userId } = req.params;
-  const { blockerUserId, reason, blockType } = req.body;
+  const authReq = req as AuthenticatedRequest;
+  const blockerUserId = authReq.user.id;
+  const { reason, blockType } = req.body;
 
   const blockId = `blk_${uuidv4().substring(0, 8)}`;
   run(`
@@ -647,15 +682,17 @@ apiRouter.post('/blocks/:userId', (req: Request, res: Response) => {
     ON CONFLICT(blocker_user_id, blocked_user_id) DO UPDATE SET status = 'ACTIVE', reason = ?
   `, [blockId, blockerUserId, userId, reason || 'User preference', blockType || 'PASSENGER_TO_DRIVER', blockerUserId, reason || 'User preference']);
 
-  // Also remove from favorites if exists
+  // Also inactivate any favorite link
   run(`UPDATE favorites SET status = 'INACTIVE' WHERE (passenger_id = ? AND driver_id = ?)`, [blockerUserId, userId]);
 
   res.json({ success: true, message: 'User blocked. You will not be matched together.' });
 });
 
-apiRouter.delete('/blocks/:userId', (req: Request, res: Response) => {
+apiRouter.delete('/blocks/:userId', authenticateToken, (req: Request, res: Response) => {
   const { userId } = req.params;
-  const blockerUserId = req.query.blockerUserId as string;
+  const authReq = req as AuthenticatedRequest;
+  const blockerUserId = authReq.user.id;
+
   run(`UPDATE user_blocks SET status = 'REVOKED' WHERE blocker_user_id = ? AND blocked_user_id = ?`, [blockerUserId, userId]);
   res.json({ success: true, message: 'User unblocked' });
 });
@@ -663,8 +700,10 @@ apiRouter.delete('/blocks/:userId', (req: Request, res: Response) => {
 // ==========================================
 // 9. SCHEDULED & RECURRING RIDES
 // ==========================================
-apiRouter.get('/scheduled-rides', (req: Request, res: Response) => {
-  const passengerId = (req.query.passengerId as string) || 'usr_passenger';
+apiRouter.get('/scheduled-rides', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const passengerId = authReq.user.id;
+
   const scheduled = query<any>(`
     SELECT s.*, vc.name as vehicle_category_name, vc.display_name as vehicle_category_display, vc.code as vehicle_category_code,
            d.rating_avg as driver_rating, u.name as driver_name, u.avatar_url as driver_avatar
@@ -679,9 +718,11 @@ apiRouter.get('/scheduled-rides', (req: Request, res: Response) => {
   res.json({ scheduled });
 });
 
-apiRouter.post('/scheduled-rides', async (req: Request, res: Response) => {
+apiRouter.post('/scheduled-rides', authenticateToken, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const passengerId = authReq.user.id;
+
   const {
-    passengerId,
     pickupLat,
     pickupLng,
     pickupAddress,
@@ -698,8 +739,8 @@ apiRouter.post('/scheduled-rides', async (req: Request, res: Response) => {
     flightOrTrainNumber
   } = req.body;
 
-  if (!passengerId || !pickupAddress || !destinationAddress || !scheduledTime) {
-    return res.status(400).json({ error: 'Passenger, Pickup, Destination and Scheduled Time are required' });
+  if (!pickupAddress || !destinationAddress || !scheduledTime) {
+    return res.status(400).json({ error: 'Pickup, Destination and Scheduled Time are required' });
   }
 
   const pLat = parseFloat(pickupLat) || 10.5276;
@@ -708,7 +749,6 @@ apiRouter.post('/scheduled-rides', async (req: Request, res: Response) => {
   const dLng = parseFloat(destinationLng) || 76.2220;
   const catId = vehicleCategoryId || 'cat_sedan';
 
-  // Calculate real route and fare estimate
   const route = await LocationService.calculateRoute({ lat: pLat, lng: pLng }, { lat: dLat, lng: dLng });
   const quote = FareEngine.calculateFare({
     vehicleCategoryId: catId,
@@ -749,18 +789,21 @@ apiRouter.post('/scheduled-rides', async (req: Request, res: Response) => {
   });
 });
 
-apiRouter.post('/scheduled-rides/:id/cancel', (req: Request, res: Response) => {
+apiRouter.post('/scheduled-rides/:id/cancel', authenticateToken, (req: Request, res: Response) => {
   const { id } = req.params;
-  run(`UPDATE scheduled_bookings SET status = 'CANCELLED' WHERE id = ?`, [id]);
+  const authReq = req as AuthenticatedRequest;
+
+  run(`UPDATE scheduled_bookings SET status = 'CANCELLED' WHERE id = ? AND passenger_id = ?`, [id, authReq.user.id]);
   res.json({ success: true, message: 'Scheduled ride cancelled successfully' });
 });
 
-apiRouter.post('/scheduled-rides/:id/dispatch-now', async (req: Request, res: Response) => {
+apiRouter.post('/scheduled-rides/:id/dispatch-now', authenticateToken, async (req: Request, res: Response) => {
   const { id } = req.params;
-  const sched = get<any>('SELECT * FROM scheduled_bookings WHERE id = ?', [id]);
+  const authReq = req as AuthenticatedRequest;
+
+  const sched = get<any>('SELECT * FROM scheduled_bookings WHERE id = ? AND passenger_id = ?', [id, authReq.user.id]);
   if (!sched) return res.status(404).json({ error: 'Scheduled ride not found' });
 
-  // Convert into live active booking
   const route = await LocationService.calculateRoute(
     { lat: sched.pickup_lat, lng: sched.pickup_lng },
     { lat: sched.destination_lat, lng: sched.destination_lng }
@@ -823,60 +866,75 @@ apiRouter.post('/scheduled-rides/:id/dispatch-now', async (req: Request, res: Re
 // ==========================================
 // 10. DRIVER PORTAL & CUSTOM PRICING
 // ==========================================
-apiRouter.patch('/driver/status', (req: Request, res: Response) => {
-  const { driverId, availabilityStatus } = req.body;
-  run(`UPDATE driver_profiles SET availability_status = ? WHERE id = ?`, [availabilityStatus, driverId]);
-  const updated = get<DriverProfile>('SELECT * FROM driver_profiles WHERE id = ?', [driverId]);
+apiRouter.patch('/driver/status', authenticateToken, requireRole('DRIVER'), (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const { availabilityStatus } = req.body;
+
+  const profile = get<DriverProfile>('SELECT id FROM driver_profiles WHERE user_id = ?', [authReq.user.id]);
+  if (!profile) return res.status(404).json({ error: 'Driver profile not found' });
+
+  run(`UPDATE driver_profiles SET availability_status = ? WHERE id = ?`, [availabilityStatus, profile.id]);
+  const updated = get<DriverProfile>('SELECT * FROM driver_profiles WHERE id = ?', [profile.id]);
   res.json({ driver: updated });
 });
 
-apiRouter.get('/driver/pricing', (req: Request, res: Response) => {
-  const driverId = req.query.driverId as string;
+apiRouter.get('/driver/pricing', authenticateToken, requireRole('DRIVER'), (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const profile = get<DriverProfile>('SELECT id FROM driver_profiles WHERE user_id = ?', [authReq.user.id]);
+  if (!profile) return res.status(404).json({ error: 'Driver profile not found' });
+
   const pricing = query(`
     SELECT dp.*, vc.name as category_name, vc.per_km_rate as admin_per_km, vc.max_deviation_percent
     FROM driver_pricing dp
     JOIN vehicle_categories vc ON dp.vehicle_category_id = vc.id
     WHERE dp.driver_id = ?
-  `, [driverId]);
+  `, [profile.id]);
   res.json({ pricing });
 });
 
-apiRouter.put('/driver/pricing', (req: Request, res: Response) => {
-  const { driverId, vehicleCategoryId, customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare } = req.body;
+apiRouter.put('/driver/pricing', authenticateToken, requireRole('DRIVER'), (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const profile = get<DriverProfile>('SELECT id FROM driver_profiles WHERE user_id = ?', [authReq.user.id]);
+  if (!profile) return res.status(404).json({ error: 'Driver profile not found' });
+
+  const { vehicleCategoryId, customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare } = req.body;
   
   const validation = FareEngine.validateDriverPricing(vehicleCategoryId, customPerKm, customBaseFare);
   if (!validation.valid) {
     return res.status(400).json({ error: validation.message });
   }
 
-  const existing = get('SELECT id FROM driver_pricing WHERE driver_id = ? AND vehicle_category_id = ?', [driverId, vehicleCategoryId]);
+  const existing = get('SELECT id FROM driver_pricing WHERE driver_id = ? AND vehicle_category_id = ?', [profile.id, vehicleCategoryId]);
   if (existing) {
     run(`
       UPDATE driver_pricing
       SET custom_base_fare = ?, custom_per_km = ?, custom_per_minute = ?, custom_waiting_rate = ?, custom_minimum_fare = ?
       WHERE driver_id = ? AND vehicle_category_id = ?
-    `, [customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare, driverId, vehicleCategoryId]);
+    `, [customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare, profile.id, vehicleCategoryId]);
   } else {
     run(`
       INSERT INTO driver_pricing (id, driver_id, vehicle_category_id, custom_base_fare, custom_per_km, custom_per_minute, custom_waiting_rate, custom_minimum_fare)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `, [uuidv4(), driverId, vehicleCategoryId, customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare]);
+    `, [uuidv4(), profile.id, vehicleCategoryId, customBaseFare, customPerKm, customPerMinute, customWaitingRate, customMinimumFare]);
   }
 
   res.json({ success: true, message: 'Driver pricing updated successfully' });
 });
 
-apiRouter.get('/driver/earnings', (req: Request, res: Response) => {
-  const driverId = (req.query.driverId as string) || 'drv_rahul';
-  const earnings = query(`SELECT * FROM driver_earnings WHERE driver_id = ? ORDER BY created_at DESC`, [driverId]);
+apiRouter.get('/driver/earnings', authenticateToken, requireRole('DRIVER'), (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const profile = get<DriverProfile>('SELECT id FROM driver_profiles WHERE user_id = ?', [authReq.user.id]);
+  if (!profile) return res.status(404).json({ error: 'Driver profile not found' });
+
+  const earnings = query(`SELECT * FROM driver_earnings WHERE driver_id = ? ORDER BY created_at DESC`, [profile.id]);
   
   const todayTotal = get<{ total: number }>(`
     SELECT SUM(net_earning) as total FROM driver_earnings 
     WHERE driver_id = ? AND created_at >= date('now', 'start of day')
-  `, [driverId])?.total || 0;
+  `, [profile.id])?.total || 0;
 
-  const totalGross = get<{ total: number }>(`SELECT SUM(gross_fare) as total FROM driver_earnings WHERE driver_id = ?`, [driverId])?.total || 0;
-  const totalCommission = get<{ total: number }>(`SELECT SUM(platform_commission) as total FROM driver_earnings WHERE driver_id = ?`, [driverId])?.total || 0;
+  const totalGross = get<{ total: number }>(`SELECT SUM(gross_fare) as total FROM driver_earnings WHERE driver_id = ?`, [profile.id])?.total || 0;
+  const totalCommission = get<{ total: number }>(`SELECT SUM(platform_commission) as total FROM driver_earnings WHERE driver_id = ?`, [profile.id])?.total || 0;
 
   res.json({
     todayEarnings: Math.round(todayTotal * 100) / 100,
@@ -887,29 +945,38 @@ apiRouter.get('/driver/earnings', (req: Request, res: Response) => {
 });
 
 // ==========================================
-// 11. WALLET & PAYMENTS
+// 11. WALLET & PAYMENTS (Tamper-Resistant)
 // ==========================================
-apiRouter.get('/wallet', (req: Request, res: Response) => {
-  const userId = (req.query.userId as string) || 'usr_passenger';
-  const data = PaymentService.getWallet(userId);
+apiRouter.get('/wallet', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const data = PaymentService.getWallet(authReq.user.id);
   res.json(data);
 });
 
-apiRouter.post('/wallet/topup', (req: Request, res: Response) => {
-  const { userId, amount } = req.body;
+apiRouter.post('/wallet/topup', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const { amount } = req.body;
   try {
-    const result = PaymentService.topUpWallet(userId || 'usr_passenger', parseFloat(amount));
+    const result = PaymentService.topUpWallet(authReq.user.id, parseFloat(amount));
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-apiRouter.post('/wallet/pay', (req: Request, res: Response) => {
+apiRouter.post('/wallet/pay', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
   const idempotencyKey = (req.headers['idempotency-key'] as string) || `pay_key_${Date.now()}`;
-  const { bookingId, userId, amount, paymentMethod } = req.body;
+  const { bookingId, paymentMethod } = req.body;
+
+  // Server authoritatively derives amount from database snapshot (prevents client price tampering)
+  const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [bookingId]);
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+
+  const payableAmount = booking.final_fare || booking.fare_estimate;
+
   try {
-    const result = PaymentService.processPayment(bookingId, userId, parseFloat(amount), paymentMethod, idempotencyKey);
+    const result = PaymentService.processPayment(bookingId, authReq.user.id, payableAmount, paymentMethod || 'UPI', idempotencyKey);
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
@@ -919,19 +986,28 @@ apiRouter.post('/wallet/pay', (req: Request, res: Response) => {
 // ==========================================
 // 12. SAFETY & SOS
 // ==========================================
-apiRouter.post('/safety/sos', (req: Request, res: Response) => {
-  const { bookingId, triggeredByUserId, lat, lng, notes } = req.body;
-  const result = SafetyService.triggerSOS(bookingId, triggeredByUserId, lat, lng, notes);
-  res.status(201).json(result);
+apiRouter.post('/safety/sos', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const { bookingId, lat, lng, notes } = req.body;
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const ua = req.headers['user-agent'] || 'Mobile App';
+
+  try {
+    const result = SafetyService.triggerSOS(bookingId, authReq.user.id, lat, lng, notes, ip, ua);
+    res.status(201).json(result);
+  } catch (err: any) {
+    res.status(403).json({ error: err.message });
+  }
 });
 
-apiRouter.post('/safety/call-mask', (req: Request, res: Response) => {
-  const { bookingId, callerUserId } = req.body;
-  const session = SafetyService.generateMaskedCallSession(bookingId, callerUserId);
+apiRouter.post('/safety/call-mask', authenticateToken, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const { bookingId } = req.body;
+  const session = SafetyService.generateMaskedCallSession(bookingId, authReq.user.id);
   res.json(session);
 });
 
-apiRouter.post('/safety/share/:id', (req: Request, res: Response) => {
+apiRouter.post('/safety/share/:id', authenticateToken, (req: Request, res: Response) => {
   const { id } = req.params;
   const link = SafetyService.generateLiveShareToken(id);
   res.json(link);
@@ -940,17 +1016,17 @@ apiRouter.post('/safety/share/:id', (req: Request, res: Response) => {
 // ==========================================
 // 13. ADMIN CONTROL CENTER & AUDIT
 // ==========================================
-apiRouter.get('/admin/dashboard', (_req: Request, res: Response) => {
+apiRouter.get('/admin/dashboard', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
   const metrics = AdminService.getDashboardMetrics();
   res.json({ metrics });
 });
 
-apiRouter.get('/admin/audit-logs', (_req: Request, res: Response) => {
+apiRouter.get('/admin/audit-logs', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
   const logs = query<any>('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 50');
   res.json({ logs });
 });
 
-apiRouter.get('/admin/documents', (_req: Request, res: Response) => {
+apiRouter.get('/admin/documents', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
   const docs = query<any>(`
     SELECT doc.*, u.name as driver_name, u.phone as driver_phone
     FROM driver_documents doc
@@ -961,28 +1037,29 @@ apiRouter.get('/admin/documents', (_req: Request, res: Response) => {
   res.json({ documents: docs });
 });
 
-apiRouter.post('/admin/documents/:id/verify', (req: Request, res: Response) => {
+apiRouter.post('/admin/documents/:id/verify', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (req: Request, res: Response) => {
   const { id } = req.params;
-  const { adminUserId, status, rejectionReason } = req.body;
+  const authReq = req as AuthenticatedRequest;
+  const { status, rejectionReason } = req.body;
   try {
-    const updated = AdminService.reviewDriverDocument(id, adminUserId || 'usr_admin', status, rejectionReason);
+    const updated = AdminService.reviewDriverDocument(id, authReq.user.id, status, rejectionReason);
     res.json({ document: updated });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
 });
 
-apiRouter.get('/admin/fraud', (_req: Request, res: Response) => {
+apiRouter.get('/admin/fraud', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
   const anomalies = AdminService.scanFraudAnomalies();
   res.json({ anomalies });
 });
 
-apiRouter.get('/admin/surge-zones', (_req: Request, res: Response) => {
+apiRouter.get('/admin/surge-zones', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (_req: Request, res: Response) => {
   const zones = query('SELECT * FROM geofences ORDER BY active DESC');
   res.json({ zones });
 });
 
-apiRouter.post('/admin/surge-zones', (req: Request, res: Response) => {
+apiRouter.post('/admin/surge-zones', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (req: Request, res: Response) => {
   const { name, city, zoneType, centerLat, centerLng, radiusMeters, surgeMultiplier, surchargeAmount } = req.body;
   const id = `geo_${uuidv4().substring(0, 8)}`;
   run(`
@@ -995,22 +1072,23 @@ apiRouter.post('/admin/surge-zones', (req: Request, res: Response) => {
 });
 
 // ==========================================
-// 14. CHAT
+// 14. IN-RIDE CHAT
 // ==========================================
-apiRouter.get('/chat/:bookingId', (req: Request, res: Response) => {
+apiRouter.get('/chat/:bookingId', authenticateToken, (req: Request, res: Response) => {
   const { bookingId } = req.params;
   const messages = query('SELECT * FROM chat_messages WHERE booking_id = ? ORDER BY created_at ASC', [bookingId]);
   res.json({ messages });
 });
 
-apiRouter.post('/chat/:bookingId', (req: Request, res: Response) => {
+apiRouter.post('/chat/:bookingId', authenticateToken, (req: Request, res: Response) => {
   const { bookingId } = req.params;
-  const { senderId, senderRole, message } = req.body;
+  const authReq = req as AuthenticatedRequest;
+  const { message } = req.body;
   const msgId = `msg_${Date.now()}`;
   run(`
     INSERT INTO chat_messages (id, booking_id, sender_id, sender_role, message)
     VALUES (?, ?, ?, ?, ?)
-  `, [msgId, bookingId, senderId, senderRole, message]);
+  `, [msgId, bookingId, authReq.user.id, authReq.user.role, message]);
   res.status(201).json({ success: true, messageId: msgId });
 });
 
@@ -1028,17 +1106,17 @@ apiRouter.get('/tour-packages', (_req: Request, res: Response) => {
   res.json({ packages: parsed });
 });
 
-apiRouter.post('/tour-packages/book', async (req: Request, res: Response) => {
+apiRouter.post('/tour-packages/book', authenticateToken, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const passengerId = authReq.user.id;
+
   const {
     packageId,
-    passengerId,
     startDate,
     pickupAddress,
     pickupLat,
     pickupLng,
-    selectedVehicleCategory,
-    numberOfTravellers,
-    specialRequests
+    selectedVehicleCategory
   } = req.body;
 
   const pkg = get<any>('SELECT * FROM tour_packages WHERE id = ?', [packageId]);
@@ -1052,7 +1130,6 @@ apiRouter.post('/tour-packages/book', async (req: Request, res: Response) => {
   const pLng = parseFloat(pickupLng) || 76.2144;
   const vehicleCat = selectedVehicleCategory || 'cat_tempo_traveller';
 
-  // Calculate fare multiplier based on vehicle
   let multiplier = 1.0;
   if (vehicleCat.includes('tempo')) multiplier = 1.4;
   else if (vehicleCat.includes('bus_35')) multiplier = 2.8;
@@ -1074,7 +1151,7 @@ apiRouter.post('/tour-packages/book', async (req: Request, res: Response) => {
       'v2.0', 1.0, 'UPI', 'PENDING', 'DRIVER_ASSIGNED'
     )
   `, [
-    bookingId, bookingNumber, passengerId || 'usr_passenger', vehicleCat,
+    bookingId, bookingNumber, passengerId, vehicleCat,
     pLat, pLng, pickupAddress || 'Doorstep Pickup, Kerala', pkg.destination,
     startDate || new Date().toISOString(), otpCode, totalFare
   ]);
@@ -1090,13 +1167,14 @@ apiRouter.post('/tour-packages/book', async (req: Request, res: Response) => {
 // ==========================================
 // 16. PARCEL & LOCAL SHOP DELIVERIES
 // ==========================================
-apiRouter.post('/parcels/book', async (req: Request, res: Response) => {
+apiRouter.post('/parcels/book', authenticateToken, async (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest;
+  const senderId = authReq.user.id;
+
   const {
-    senderId,
     pickupAddress,
     pickupLat,
     pickupLng,
-    senderPhone,
     destinationAddress,
     destinationLat,
     destinationLng,
@@ -1145,7 +1223,7 @@ apiRouter.post('/parcels/book', async (req: Request, res: Response) => {
       'v2.0', 1.0, 'UPI', 'PENDING', 'SEARCHING'
     )
   `, [
-    bookingId, bookingNumber, senderId || 'usr_passenger', catId,
+    bookingId, bookingNumber, senderId, catId,
     pLat, pLng, pickupAddress, dLat, dLng, destinationAddress,
     route.distanceKm, route.durationMin, deliveryPin, quote.total_fare
   ]);
@@ -1157,7 +1235,7 @@ apiRouter.post('/parcels/book', async (req: Request, res: Response) => {
       package_type, weight_category, is_fragile, notes, delivery_pin, status
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING')
   `, [
-    parcelId, bookingId, senderId || 'usr_passenger', receiverName, receiverPhone,
+    parcelId, bookingId, senderId, receiverName, receiverPhone,
     packageType || 'SHOP_PARCEL', weightCategory || 'UP_TO_5KG', isFragile ? 1 : 0, notes || '', deliveryPin
   ]);
 
@@ -1172,7 +1250,7 @@ apiRouter.post('/parcels/book', async (req: Request, res: Response) => {
   });
 });
 
-apiRouter.get('/parcels/:bookingId', (req: Request, res: Response) => {
+apiRouter.get('/parcels/:bookingId', authenticateToken, (req: Request, res: Response) => {
   const { bookingId } = req.params;
   const parcel = get('SELECT * FROM parcel_deliveries WHERE booking_id = ?', [bookingId]);
   if (!parcel) return res.status(404).json({ error: 'Parcel record not found' });

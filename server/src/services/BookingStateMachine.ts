@@ -94,13 +94,27 @@ export class BookingStateMachine {
     } else if (newStatus === 'TRIP_STARTED') {
       run(`UPDATE bookings SET status = ?, started_at = ? WHERE id = ?`, [newStatus, now, bookingId]);
     } else if (newStatus === 'COMPLETED') {
-      const distance = metadata.finalDistanceKm || booking.distance_km;
-      const duration = metadata.finalDurationMin || booking.duration_min;
-      const finalFare = booking.fare_estimate; // Or recalibrated if deviation
+      const actualDistance = metadata.finalDistanceKm || booking.distance_km || 4.5;
+      const actualDuration = metadata.finalDurationMin || booking.duration_min || 15;
+
+      let finalFare = booking.fare_estimate;
+      try {
+        const quote = FareEngine.calculateFare({
+          vehicleCategoryId: booking.vehicle_category_id,
+          distanceKm: actualDistance,
+          durationMin: actualDuration,
+          pickupLat: booking.pickup_lat,
+          pickupLng: booking.pickup_lng,
+          driverId: booking.driver_id || undefined
+        });
+        finalFare = quote.total_fare;
+      } catch (err) {
+        finalFare = booking.fare_estimate;
+      }
 
       run(
-        `UPDATE bookings SET status = ?, completed_at = ?, final_fare = ?, payment_status = 'COMPLETED' WHERE id = ?`,
-        [newStatus, now, finalFare, bookingId]
+        `UPDATE bookings SET status = ?, completed_at = ?, distance_km = ?, duration_min = ?, final_fare = ?, payment_status = 'COMPLETED' WHERE id = ?`,
+        [newStatus, now, actualDistance, actualDuration, finalFare, bookingId]
       );
 
       if (booking.driver_id) {

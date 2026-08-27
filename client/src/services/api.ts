@@ -1,8 +1,10 @@
 const API_BASE = '/api';
 
 export async function fetchApi<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const token = localStorage.getItem('aditiride_token');
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers as Record<string, string> || {})
   };
 

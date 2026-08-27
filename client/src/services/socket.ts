@@ -4,10 +4,15 @@ let socketInstance: Socket | null = null;
 
 export function getSocket(): Socket {
   if (!socketInstance) {
+    const token = localStorage.getItem('aditiride_token') || undefined;
+
     socketInstance = io(window.location.origin, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 10,
-      reconnectionDelay: 1000
+      reconnectionDelay: 1000,
+      auth: {
+        token
+      }
     });
 
     socketInstance.on('connect', () => {
@@ -20,6 +25,14 @@ export function getSocket(): Socket {
   }
 
   return socketInstance;
+}
+
+export function reconnectSocketWithAuth(token: string): Socket {
+  if (socketInstance) {
+    socketInstance.disconnect();
+    socketInstance = null;
+  }
+  return getSocket();
 }
 
 export const socket = getSocket();

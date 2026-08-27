@@ -2,6 +2,7 @@ import initSqlJs, { Database } from 'sql.js';
 import fs from 'fs';
 import path from 'path';
 import { SCHEMA_SQL } from './schema.js';
+import { hashPassword } from '../middleware/auth.js';
 
 let dbInstance: Database | null = null;
 const DB_FILE_PATH = path.resolve(process.cwd(), 'aditiride.sqlite');
@@ -26,6 +27,20 @@ export async function getDb(): Promise<Database> {
   // Initialize schema
   dbInstance.run(SCHEMA_SQL);
   seedDatabase(dbInstance);
+
+  // Upgrade any non-bcrypt user passwords to secure bcrypt hashes
+  try {
+    const unhashedUsers = dbInstance.exec("SELECT id, password_hash FROM users WHERE password_hash NOT LIKE '$2%'");
+    if (unhashedUsers[0]?.values) {
+      for (const row of unhashedUsers[0].values) {
+        const uid = row[0] as string;
+        const plain = (row[1] as string) || 'Thathu@110';
+        const newHash = hashPassword(plain);
+        dbInstance.run("UPDATE users SET password_hash = ? WHERE id = ?", [newHash, uid]);
+      }
+    }
+  } catch {}
+
   saveDb();
 
   return dbInstance;
@@ -698,10 +713,11 @@ function seedDatabase(db: Database) {
   ];
 
   for (const u of users) {
+    const pwdHash = hashPassword(u.password);
     db.run(`
       INSERT INTO users (id, username, phone, email, name, role, password_hash, avatar_url, emergency_contact, preferred_language, status)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-    `, [u.id, u.username, u.phone, u.email, u.name, u.role, u.password, u.avatar, u.emergency, u.lang]);
+    `, [u.id, u.username, u.phone, u.email, u.name, u.role, pwdHash, u.avatar, u.emergency, u.lang]);
   }
 
   // 3. Passenger Profile
