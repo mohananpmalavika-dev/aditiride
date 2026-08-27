@@ -26,12 +26,12 @@ describe('Booking State Machine & Lifecycle Tests', () => {
   it('requires valid 4-digit OTP to transition to TRIP_STARTED', () => {
     // Create test booking
     run(`
-      INSERT INTO bookings (
+      INSERT OR REPLACE INTO bookings (
         id, booking_number, passenger_id, driver_id, vehicle_category_id,
         pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
         distance_km, duration_min, otp_code, fare_estimate, status
       ) VALUES (
-        'bk_test_otp_1', 'ADITI-TEST-1', 'usr_passenger', 'drv_rahul', 'cat_sedan',
+        'bk_test_otp_1', 'ADITI-TEST-OTP-001', 'usr_passenger', 'drv_rahul', 'cat_sedan',
         10.52, 76.21, 'Pickup', 10.53, 76.22, 'Dest',
         4.0, 12, '7788', 150.0, 'DRIVER_ARRIVED'
       )

@@ -9,6 +9,10 @@ import { BookingStateMachine } from '../services/BookingStateMachine.js';
 import { PaymentService } from '../services/PaymentService.js';
 import { SafetyService } from '../services/SafetyService.js';
 import { AdminService } from '../services/AdminService.js';
+import { IdempotencyService } from '../services/IdempotencyService.js';
+import { DispatchEngine } from '../services/DispatchEngine.js';
+import { DriverKYCService } from '../services/DriverKYCService.js';
+import { createBookingSchema } from '../validators/schemas.js';
 import {
   authenticateToken,
   optionalAuth,
@@ -328,6 +332,26 @@ apiRouter.post('/bookings', authenticateToken, async (req: Request, res: Respons
   const authReq = req as AuthenticatedRequest;
   const passengerId = authReq.user.id; // Enforce authenticated identity
 
+  // 1. Idempotency Key Handling
+  const idempotencyKey = req.headers['idempotency-key'] as string;
+  if (idempotencyKey) {
+    try {
+      const check = IdempotencyService.acquireKey(idempotencyKey, passengerId, 'CREATE_BOOKING', req.body);
+      if (check.isExisting && check.cachedResponse) {
+        return res.status(check.cachedResponse.status).json(check.cachedResponse.body);
+      }
+    } catch (err: any) {
+      return res.status(409).json({ error: err.message });
+    }
+  }
+
+  // 2. Request Validation
+  const validation = createBookingSchema.safeParse(req.body);
+  if (!validation.success) {
+    if (idempotencyKey) IdempotencyService.failKey(idempotencyKey, passengerId);
+    return res.status(400).json({ error: 'Validation failed', details: validation.error.format() });
+  }
+
   const {
     vehicleCategoryId,
     pickupLat,
@@ -341,13 +365,9 @@ apiRouter.post('/bookings', authenticateToken, async (req: Request, res: Respons
     paymentMethod,
     stops,
     preferredDriverId
-  } = req.body;
+  } = validation.data;
 
-  if (!pickupLat || !pickupLng || !destinationLat || !destinationLng) {
-    return res.status(400).json({ error: 'Pickup and Destination coordinates are required' });
-  }
-
-  // Calculate real OSRM road route & authoritative price quote
+  // 3. Calculate real OSRM road route & authoritative price quote
   const route = await LocationService.calculateRoute(
     { lat: pickupLat, lng: pickupLng },
     { lat: destinationLat, lng: destinationLng },
@@ -368,21 +388,19 @@ apiRouter.post('/bookings', authenticateToken, async (req: Request, res: Respons
   const bookingNumber = `ADITI-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`;
   const otpCode = SafetyService.generateTripOtp();
 
-  let candidateDriverId: string | null = null;
-  const nearbyDrivers = MatchingEngine.findNearbyDrivers(
+  // 4. Dispatch with atomic driver availability leases & expanding radius
+  const dispatchResult = DispatchEngine.dispatchBooking(
     passengerId,
+    bookingId,
     pickupLat,
     pickupLng,
     vehicleCategoryId,
-    10.0,
     preferredDriverId
   );
 
-  let initialStatus = 'SEARCHING';
-  if (nearbyDrivers.length > 0) {
-    candidateDriverId = nearbyDrivers[0].driverId;
-    initialStatus = 'DRIVER_ASSIGNED';
-  }
+  const candidateDriver = dispatchResult.candidateDriver;
+  const candidateDriverId = candidateDriver ? candidateDriver.driverId : null;
+  const initialStatus = candidateDriverId ? 'DRIVER_ASSIGNED' : 'SEARCHING';
 
   run(`
     INSERT INTO bookings (
@@ -432,13 +450,12 @@ apiRouter.post('/bookings', authenticateToken, async (req: Request, res: Respons
 
   // Broadcast real-time voice & offer alert to matched driver
   const io = (req as any).io;
-  if (io && nearbyDrivers.length > 0 && created) {
-    const targetDriver = nearbyDrivers[0];
+  if (io && candidateDriver && created) {
     const offerPayload = {
       bookingId: created.id,
       bookingNumber: created.booking_number,
-      driverId: targetDriver.driverId,
-      driverUserId: targetDriver.userId,
+      driverId: candidateDriver.driverId,
+      driverUserId: candidateDriver.userId,
       passengerId: passengerId,
       passengerName: created.passenger_name || 'Passenger',
       pickupAddress: created.pickup_address,
@@ -448,20 +465,28 @@ apiRouter.post('/bookings', authenticateToken, async (req: Request, res: Respons
       durationMin: created.duration_min,
       vehicleCategoryId: created.vehicle_category_id,
       vehicleCategoryName: created.vehicle_category_name,
-      isFavoriteRequest: !!preferredDriverId
+      isFavoriteRequest: !!preferredDriverId,
+      dispatchStage: dispatchResult.dispatchStage,
+      offerExpiresAt: dispatchResult.offerExpiresAt
     };
 
-    io.to(`user_${targetDriver.userId}`).emit('incoming_ride_offer', offerPayload);
-    io.to(`driver_${targetDriver.driverId}`).emit('incoming_ride_offer', offerPayload);
-    io.emit('incoming_ride_offer_broadcast', offerPayload);
+    io.to(`user_${candidateDriver.userId}`).emit('incoming_ride_offer', offerPayload);
+    io.to(`driver_${candidateDriver.driverId}`).emit('incoming_ride_offer', offerPayload);
   }
 
-  res.status(201).json({
+  const responseData = {
     booking: created,
     route,
     quote,
-    assignedDriver: nearbyDrivers[0] || null
-  });
+    assignedDriver: candidateDriver || null,
+    dispatchStage: dispatchResult.dispatchStage
+  };
+
+  if (idempotencyKey) {
+    IdempotencyService.completeKey(idempotencyKey, passengerId, 201, responseData);
+  }
+
+  res.status(201).json(responseData);
 });
 
 apiRouter.get('/bookings/recent', authenticateToken, (req: Request, res: Response) => {
@@ -907,6 +932,14 @@ apiRouter.patch('/driver/status', authenticateToken, requireRole('DRIVER'), (req
   const profile = get<DriverProfile>('SELECT id FROM driver_profiles WHERE user_id = ?', [authReq.user.id]);
   if (!profile) return res.status(404).json({ error: 'Driver profile not found' });
 
+  if (availabilityStatus === 'ONLINE') {
+    try {
+      DriverKYCService.assertCanGoOnline(profile.id);
+    } catch (err: any) {
+      return res.status(403).json({ error: err.message });
+    }
+  }
+
   run(`UPDATE driver_profiles SET availability_status = ? WHERE id = ?`, [availabilityStatus, profile.id]);
   const updated = get<DriverProfile>('SELECT * FROM driver_profiles WHERE id = ?', [profile.id]);
   res.json({ driver: updated });
@@ -1078,6 +1111,30 @@ apiRouter.post('/admin/documents/:id/verify', authenticateToken, requireRole('SU
   try {
     const updated = AdminService.reviewDriverDocument(id, authReq.user.id, status, rejectionReason);
     res.json({ document: updated });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/admin/drivers/:id/verify', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  const authReq = req as AuthenticatedRequest;
+  const { reason } = req.body;
+  try {
+    const result = DriverKYCService.updateVerificationStatus(id, 'VERIFIED', authReq.user.id, reason);
+    res.json({ success: true, driver: result.driver, message: 'Driver successfully verified' });
+  } catch (err: any) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+apiRouter.post('/admin/drivers/:id/suspend', authenticateToken, requireRole('SUPER_ADMIN', 'ADMIN'), (req: Request, res: Response) => {
+  const { id } = req.params;
+  const authReq = req as AuthenticatedRequest;
+  const { reason } = req.body;
+  try {
+    const result = DriverKYCService.updateVerificationStatus(id, 'SUSPENDED', authReq.user.id, reason);
+    res.json({ success: true, driver: result.driver, message: 'Driver suspended' });
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }

@@ -1,49 +1,79 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import http from 'http';
 import { Server } from 'socket.io';
-import cors from 'cors';
 import dotenv from 'dotenv';
 import { getDb } from './db/index.js';
 import { apiRouter } from './routes/index.js';
+import { healthRouter } from './routes/health.routes.js';
 import { setupSocketHandlers } from './realtime/socketHandler.js';
+import {
+  corsMiddleware,
+  helmetMiddleware,
+  generalApiLimiter,
+  authRateLimiter
+} from './middleware/security.js';
 
 dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
+
+const ALLOWED_ORIGINS = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
+  : ['http://localhost:5180', 'http://localhost:3000', 'http://127.0.0.1:5180'];
+
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+    origin: ALLOWED_ORIGINS,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    credentials: true
   }
 });
 
-app.use(cors());
-app.use(express.json());
+// Security & Parsing Middlewares
+app.use(helmetMiddleware);
+app.use(corsMiddleware);
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
-// Attach Socket.IO to requests if needed
+// General Rate Limiter
+app.use(generalApiLimiter);
+
+// Attach Socket.IO to requests
 app.use((req, _res, next) => {
   (req as any).io = io;
   next();
 });
 
-// Health Checks
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'AditiRide Platform API', timestamp: new Date().toISOString() });
-});
+// Health Checks & Probes
+app.use('/health', healthRouter);
+app.use('/', healthRouter);
 
-// API Routes
-app.use('/api', apiRouter);
+// API Routes with Versioning
+app.use('/api/v1', apiRouter);
+app.use('/api', apiRouter); // Backward compatibility fallback
 
 // Initialize Realtime Handlers
 setupSocketHandlers(io);
 
+// Global Error Handler Middleware
+app.use((err: any, req: Request, res: Response, _next: NextFunction) => {
+  console.error(`[Error] ${req.method} ${req.path}:`, err.message || err);
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    error: {
+      code: err.code || 'INTERNAL_SERVER_ERROR',
+      message: err.message || 'An unexpected error occurred.',
+      timestamp: new Date().toISOString()
+    }
+  });
+});
+
 const PORT = process.env.PORT || 5099;
 
-// Initialize Database before listening
 getDb().then(() => {
   server.listen(PORT, () => {
-    console.log(`🚀 AditiRide Server listening on http://localhost:${PORT}`);
+    console.log(`🚀 AditiRide Authoritative Server listening on http://localhost:${PORT}`);
     console.log(`📡 Real-Time Socket.IO Server active on port ${PORT}`);
   });
 }).catch((err) => {

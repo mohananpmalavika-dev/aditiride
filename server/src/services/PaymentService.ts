@@ -1,10 +1,11 @@
 import { v4 as uuidv4 } from 'uuid';
 import { get, query, run } from '../db/index.js';
 import { Payment, PaymentMethod, PaymentStatus, Wallet, WalletTransaction, DriverEarning, Booking, VehicleCategory } from '../types/index.js';
+import { LedgerService } from './LedgerService.js';
 
 export class PaymentService {
   /**
-   * Process idempotent payment for a completed booking
+   * Process idempotent payment for a completed booking with transactional double-entry accounting
    */
   public static processPayment(
     bookingId: string,
@@ -33,25 +34,53 @@ export class PaymentService {
     const netDriverEarning = Math.max(0, Math.round((amount - platformCommission - taxAmount) * 100) / 100);
 
     let passengerWalletBalance = 0;
+    const amountPaise = LedgerService.rupeesToPaise(amount);
 
-    // Handle Wallet Deduction
+    // 2. Handle Wallet Double-Entry Accounting
     if (paymentMethod === 'WALLET') {
+      const userAccountId = LedgerService.getOrCreateAccount(userId, 'USER_WALLET');
+      const clearingAccountId = LedgerService.getPlatformClearingAccount();
+      const revenueAccountId = LedgerService.getPlatformRevenueAccount();
+
       const wallet = get<Wallet>('SELECT * FROM wallets WHERE user_id = ?', [userId]);
       if (!wallet || wallet.balance < amount) {
         throw new Error(`Insufficient wallet balance. Available: ₹${wallet?.balance || 0}, Required: ₹${amount}`);
       }
 
+      // Record double-entry transaction: User Wallet -> Platform Clearing
+      LedgerService.recordDoubleEntryTransaction(
+        'RIDE_PAYMENT',
+        bookingId,
+        userAccountId,
+        clearingAccountId,
+        amountPaise,
+        `Ride payment debit for ${booking.booking_number}`
+      );
+
+      // Record platform commission: Clearing -> Revenue
+      if (platformCommission > 0) {
+        const commPaise = LedgerService.rupeesToPaise(platformCommission);
+        LedgerService.recordDoubleEntryTransaction(
+          'RIDE_PAYMENT',
+          bookingId,
+          clearingAccountId,
+          revenueAccountId,
+          commPaise,
+          `Platform commission for ${booking.booking_number}`
+        );
+      }
+
       passengerWalletBalance = wallet.balance - amount;
       run(`UPDATE wallets SET balance = balance - ?, updated_at = datetime('now') WHERE user_id = ?`, [amount, userId]);
 
-      // Record Debit Transaction
+      // Record transaction ledger log
       run(`
         INSERT INTO wallet_transactions (id, wallet_id, amount, type, reference_type, reference_id, description)
         VALUES (?, ?, ?, 'DEBIT', 'RIDE_PAYMENT', ?, ?)
       `, [uuidv4(), wallet.id, amount, bookingId, `Ride payment for ${booking.booking_number}`]);
     }
 
-    // Create Payment Record
+    // 3. Create Authoritative Payment Record
     const paymentId = `pay_${uuidv4().substring(0, 8)}`;
     const gatewayTxId = `gw_${paymentMethod.toLowerCase()}_${Date.now()}`;
     run(`
@@ -59,7 +88,7 @@ export class PaymentService {
       VALUES (?, ?, ?, ?, 'INR', ?, ?, ?, 'COMPLETED')
     `, [paymentId, bookingId, userId, amount, paymentMethod, gatewayTxId, idempotencyKey]);
 
-    // Record Driver Earning
+    // 4. Record Driver Earning & Payout Ledger
     if (booking.driver_id) {
       const earningId = `earn_${uuidv4().substring(0, 8)}`;
       const cashCollected = paymentMethod === 'CASH' ? amount : 0.0;
@@ -69,7 +98,7 @@ export class PaymentService {
       `, [earningId, booking.driver_id, bookingId, amount, platformCommission, taxAmount, netDriverEarning, cashCollected]);
     }
 
-    // Update booking payment status
+    // 5. Update booking payment status
     run(`UPDATE bookings SET payment_method = ?, payment_status = 'COMPLETED' WHERE id = ?`, [paymentMethod, bookingId]);
 
     const createdPayment = get<Payment>('SELECT * FROM payments WHERE id = ?', [paymentId]);
@@ -80,7 +109,7 @@ export class PaymentService {
   }
 
   /**
-   * Add money to user wallet
+   * Add money to user wallet with double-entry accounting
    */
   public static topUpWallet(userId: string, amount: number): { wallet: Wallet; transaction: WalletTransaction } {
     if (amount <= 0) throw new Error('Top-up amount must be greater than zero');
@@ -94,6 +123,20 @@ export class PaymentService {
       run(`UPDATE wallets SET balance = balance + ?, updated_at = datetime('now') WHERE id = ?`, [amount, wallet.id]);
       wallet = get<Wallet>('SELECT * FROM wallets WHERE id = ?', [wallet.id])!;
     }
+
+    // Double-entry record: Clearing -> User Wallet
+    const userAccountId = LedgerService.getOrCreateAccount(userId, 'USER_WALLET');
+    const clearingAccountId = LedgerService.getPlatformClearingAccount();
+    const amountPaise = LedgerService.rupeesToPaise(amount);
+
+    LedgerService.recordDoubleEntryTransaction(
+      'WALLET_TOPUP',
+      null,
+      clearingAccountId,
+      userAccountId,
+      amountPaise,
+      `Wallet top-up via UPI gateway`
+    );
 
     const txId = `tx_${uuidv4().substring(0, 8)}`;
     run(`

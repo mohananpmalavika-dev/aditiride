@@ -426,13 +426,80 @@ CREATE TABLE IF NOT EXISTS feature_flags (
   description TEXT NOT NULL
 );
 
+-- Idempotency Keys (Prevent duplicate bookings & payments)
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  key TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  operation TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PROCESSING',
+  response_code INTEGER,
+  response_body TEXT,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Booking State Events (Immutable audit trail of all state transitions)
+CREATE TABLE IF NOT EXISTS booking_state_events (
+  id TEXT PRIMARY KEY,
+  booking_id TEXT NOT NULL REFERENCES bookings(id),
+  previous_state TEXT NOT NULL,
+  new_state TEXT NOT NULL,
+  actor_id TEXT NOT NULL REFERENCES users(id),
+  actor_role TEXT NOT NULL,
+  reason TEXT,
+  metadata_json TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Driver Availability Leases (Atomic reservation preventing race conditions)
+CREATE TABLE IF NOT EXISTS driver_leases (
+  driver_id TEXT PRIMARY KEY REFERENCES driver_profiles(id),
+  booking_id TEXT NOT NULL REFERENCES bookings(id),
+  status TEXT NOT NULL DEFAULT 'OFFERED',
+  lease_expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Immutable Double-Entry Ledger (Financial precision in Paise)
+CREATE TABLE IF NOT EXISTS ledger_accounts (
+  id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id),
+  account_type TEXT NOT NULL, -- 'USER_WALLET', 'PLATFORM_REVENUE', 'PLATFORM_CLEARING', 'DRIVER_PAYABLE', 'TAX_PAYABLE'
+  currency TEXT NOT NULL DEFAULT 'INR',
+  balance_paise INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS ledger_transactions (
+  id TEXT PRIMARY KEY,
+  booking_id TEXT REFERENCES bookings(id),
+  transaction_type TEXT NOT NULL, -- 'RIDE_PAYMENT', 'WALLET_TOPUP', 'DRIVER_PAYOUT', 'REFUND', 'CANCELLATION_FEE'
+  reference_id TEXT,
+  description TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS ledger_entries (
+  id TEXT PRIMARY KEY,
+  transaction_id TEXT NOT NULL REFERENCES ledger_transactions(id),
+  account_id TEXT NOT NULL REFERENCES ledger_accounts(id),
+  entry_type TEXT NOT NULL, -- 'DEBIT', 'CREDIT'
+  amount_paise INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for lightning fast geospatial & lifecycle queries
 CREATE INDEX IF NOT EXISTS idx_driver_status ON driver_profiles(availability_status, verification_status);
 CREATE INDEX IF NOT EXISTS idx_driver_location ON driver_profiles(current_lat, current_lng);
 CREATE INDEX IF NOT EXISTS idx_booking_status ON bookings(status);
-CREATE INDEX IF NOT EXISTS idx_booking_passenger ON bookings(passenger_id);
-CREATE INDEX IF NOT EXISTS idx_booking_driver ON bookings(driver_id);
+CREATE INDEX IF NOT EXISTS idx_booking_passenger ON bookings(passenger_id, status);
+CREATE INDEX IF NOT EXISTS idx_booking_driver ON bookings(driver_id, status);
 CREATE INDEX IF NOT EXISTS idx_blocks ON user_blocks(blocker_user_id, blocked_user_id);
 CREATE INDEX IF NOT EXISTS idx_favorites ON favorites(passenger_id, driver_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs ON audit_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_fav_pass_driver ON favorites(passenger_id, driver_id, status);
+CREATE INDEX IF NOT EXISTS idx_block_users ON user_blocks(blocker_user_id, blocked_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_state_events_booking ON booking_state_events(booking_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_driver_leases ON driver_leases(driver_id, status, lease_expires_at);
 `;

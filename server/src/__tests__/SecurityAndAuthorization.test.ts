@@ -6,6 +6,10 @@ import { BookingStateMachine } from '../services/BookingStateMachine.js';
 import { FareEngine } from '../services/FareEngine.js';
 import { PaymentService } from '../services/PaymentService.js';
 import { VoiceEngine } from '../services/VoiceEngine.js';
+import { LedgerService } from '../services/LedgerService.js';
+import { IdempotencyService } from '../services/IdempotencyService.js';
+import { DispatchEngine } from '../services/DispatchEngine.js';
+import { DriverKYCService } from '../services/DriverKYCService.js';
 
 describe('P0 Security & Authorization Hardening Tests', () => {
   beforeAll(async () => {
@@ -124,6 +128,7 @@ describe('P0 Security & Authorization Hardening Tests', () => {
 
     it('should derive payable wallet amount from DB truth rather than client-submitted price', () => {
       const bookingId = 'bk_sec_payment_test';
+      run(`UPDATE wallets SET balance = 5000.0 WHERE user_id = 'usr_passenger'`);
       run(`
         INSERT OR REPLACE INTO bookings (
           id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
@@ -248,6 +253,91 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       expect(result.preview?.actionRequired).toBe('ASK_DESTINATION');
       expect(result.preview?.spokenPrompt).toContain('Where should I pick you up?');
       expect(result.entities.pickup).toBe('Location Not Provided');
+    });
+  });
+
+  describe('7. Double-Entry Ledger System (Paise Precision)', () => {
+    it('should record double-entry transactions and correctly track balances', () => {
+      const testUserId = `usr_ledger_test_${Date.now()}`;
+      const userAccountId = LedgerService.getOrCreateAccount(testUserId, 'USER_WALLET');
+      const clearingAccountId = LedgerService.getPlatformClearingAccount();
+
+      // Top up ₹500 (50,000 paise)
+      LedgerService.recordDoubleEntryTransaction(
+        'WALLET_TOPUP',
+        null,
+        clearingAccountId,
+        userAccountId,
+        50000,
+        'Test topup'
+      );
+
+      const bal = LedgerService.getWalletBalanceRupees(testUserId);
+      expect(bal).toBe(500.0);
+    });
+  });
+
+  describe('8. Idempotency Key Service', () => {
+    it('should prevent duplicate executions with the same idempotency key and return cached response', () => {
+      const key = `idem_test_${Date.now()}`;
+      const userId = 'usr_passenger';
+
+      // First call acquires
+      const check1 = IdempotencyService.acquireKey(key, userId, 'TEST_OP', { test: 123 });
+      expect(check1.isExisting).toBe(false);
+
+      // Complete
+      IdempotencyService.completeKey(key, userId, 201, { bookingId: 'bk_123', status: 'CONFIRMED' });
+
+      // Second call returns cached
+      const check2 = IdempotencyService.acquireKey(key, userId, 'TEST_OP', { test: 123 });
+      expect(check2.isExisting).toBe(true);
+      expect(check2.cachedResponse?.status).toBe(201);
+      expect(check2.cachedResponse?.body.bookingId).toBe('bk_123');
+    });
+  });
+
+  describe('9. Driver Availability Leases & Dispatch Pipeline', () => {
+    it('should acquire atomic lease on driver and prevent double reservation', () => {
+      const driverId = 'drv_rahul';
+      run(`UPDATE driver_profiles SET availability_status = 'ONLINE', verification_status = 'VERIFIED' WHERE id = ?`, [driverId]);
+
+      // Release any stale lease
+      DispatchEngine.releaseDriverLease(driverId);
+
+      // Booking 1 acquires lease
+      const acquired1 = DispatchEngine.acquireDriverLease(driverId, 'bk_race_1', 20);
+      expect(acquired1).toBe(true);
+
+      // Booking 2 attempts to lease same driver -> rejected
+      const acquired2 = DispatchEngine.acquireDriverLease(driverId, 'bk_race_2', 20);
+      expect(acquired2).toBe(false);
+
+      // Clean up
+      DispatchEngine.releaseDriverLease(driverId);
+    });
+  });
+
+  describe('10. Driver KYC Verification Guardrail', () => {
+    it('should block unverified drivers from toggling status to ONLINE', () => {
+      const testDriverId = 'drv_unverified_test';
+      run(`
+        INSERT OR REPLACE INTO driver_profiles (id, user_id, verification_status, availability_status)
+        VALUES (?, 'usr_unverified', 'DOCUMENTS_PENDING', 'OFFLINE')
+      `, [testDriverId]);
+
+      expect(() => {
+        DriverKYCService.assertCanGoOnline(testDriverId);
+      }).toThrow(/Cannot go ONLINE: Driver status is 'DOCUMENTS_PENDING'/);
+
+      // Admin reviews & verifies driver
+      DriverKYCService.updateVerificationStatus(testDriverId, 'VERIFIED', 'usr_admin', 'Approved test KYC');
+      expect(() => {
+        DriverKYCService.assertCanGoOnline(testDriverId);
+      }).not.toThrow();
+
+      // Clean up
+      run(`DELETE FROM driver_profiles WHERE id = ?`, [testDriverId]);
     });
   });
 });
