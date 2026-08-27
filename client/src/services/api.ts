@@ -82,9 +82,46 @@ export const api = {
   getScheduledRides: (passengerId?: string) => fetchApi(`/scheduled-rides?passengerId=${passengerId || 'usr_passenger'}`),
   createScheduledRide: (payload: any) => fetchApi('/scheduled-rides', { method: 'POST', body: JSON.stringify(payload) }),
 
-  // Driver
+  // Driver lifecycle helpers
   setDriverStatus: (driverId: string, availabilityStatus: string) =>
     fetchApi('/driver/status', { method: 'PATCH', body: JSON.stringify({ driverId, availabilityStatus }) }),
+  updateDriverAvailability: (driverId: string, status: string) =>
+    fetchApi('/driver/status', { method: 'PATCH', body: JSON.stringify({ driverId, availabilityStatus: status }) }),
+  driverRespondBooking: (bookingId: string, driverId: string, action: 'ACCEPT' | 'REJECT', reason?: string) =>
+    fetchApi(`/bookings/${bookingId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify({
+        nextStatus: action === 'ACCEPT' ? 'DRIVER_ACCEPTED' : 'CANCELLED_BY_DRIVER',
+        actorUserId: driverId,
+        actorRole: 'DRIVER',
+        reason
+      })
+    }),
+  driverArrived: (bookingId: string) =>
+    fetchApi(`/bookings/${bookingId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify({ nextStatus: 'DRIVER_ARRIVED', actorRole: 'DRIVER' })
+    }),
+  startTripWithOTP: (bookingId: string, otp: string) =>
+    fetchApi(`/bookings/${bookingId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify({ nextStatus: 'TRIP_STARTED', actorRole: 'DRIVER', otp })
+    }),
+  completeTrip: (bookingId: string, payload?: any) =>
+    fetchApi(`/bookings/${bookingId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify({ nextStatus: 'COMPLETED', actorRole: 'DRIVER', metadata: payload })
+    }),
+  cancelBooking: (bookingId: string, userId: string, userRole: string, reason?: string) =>
+    fetchApi(`/bookings/${bookingId}/transition`, {
+      method: 'POST',
+      body: JSON.stringify({
+        nextStatus: userRole === 'PASSENGER' ? 'CANCELLED_BY_PASSENGER' : 'CANCELLED_BY_DRIVER',
+        actorUserId: userId,
+        actorRole: userRole,
+        reason
+      })
+    }),
   getDriverPricing: (driverId: string) => fetchApi(`/driver/pricing?driverId=${driverId}`),
   updateDriverPricing: (payload: any) => fetchApi('/driver/pricing', { method: 'PUT', body: JSON.stringify(payload) }),
   getDriverEarnings: (driverId: string) => fetchApi(`/driver/earnings?driverId=${driverId}`),
@@ -111,6 +148,7 @@ export const api = {
   createSurgeZone: (payload: any) => fetchApi('/admin/surge-zones', { method: 'POST', body: JSON.stringify(payload) }),
 
   // Chat
+  getChatHistory: (bookingId: string) => fetchApi(`/chat/${bookingId}`),
   getChatMessages: (bookingId: string) => fetchApi(`/chat/${bookingId}`),
   sendChatMessage: (bookingId: string, payload: any) => fetchApi(`/chat/${bookingId}`, { method: 'POST', body: JSON.stringify(payload) })
 };

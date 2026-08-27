@@ -5,6 +5,8 @@ import { api } from '../../services/api.js';
 import { getSocket } from '../../services/socket.js';
 import { t } from '../../i18n/translations.js';
 import { OpenStreetMap } from '../common/OpenStreetMap.js';
+import { InAppChatModal } from '../common/InAppChatModal.js';
+import { InAppCallModal, CallStatus } from '../common/InAppCallModal.js';
 import {
   Shield,
   Phone,
@@ -40,113 +42,179 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
   const [routePolyline, setRoutePolyline] = useState<[number, number][]>([]);
   const [driverLocation, setDriverLocation] = useState<{ lat: number; lng: number; heading?: number } | null>(null);
 
-  // Modals & Drawers
-  const [showChat, setShowChat] = useState(false);
-  const [chatMessages, setChatMessages] = useState<any[]>([]);
-  const [newMessageText, setNewMessageText] = useState('');
-  const [showMaskedCall, setShowMaskedCall] = useState(false);
-  const [maskedCallData, setMaskedCallData] = useState<any>(null);
+  // In-App Chat & VoIP Call Modals
+  const [showChatModal, setShowChatModal] = useState(false);
+  const [showCallModal, setShowCallModal] = useState(false);
+  const [callStatus, setCallStatus] = useState<CallStatus>('IDLE');
+  const [callSessionId, setCallSessionId] = useState<string>('');
+
   const [showSOSModal, setShowSOSModal] = useState(false);
   const [sosActive, setSosActive] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
-
-  // Rating & Completion
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [ratingScore, setRatingScore] = useState(5);
-  const [selectedTags, setSelectedTags] = useState<string[]>(['Smooth Driving', 'Polite', 'Clean Car']);
   const [feedbackComment, setFeedbackComment] = useState('');
-  const [addToFavorites, setAddToFavorites] = useState(true);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [addToFavorites, setAddToFavorites] = useState(false);
 
   const socket = getSocket();
 
-  const fetchBookingData = async () => {
+  // Load active booking data & listen to real-time events
+  useEffect(() => {
+    loadBookingData();
+
+    socket.emit('join_user', currentUser.id);
+    socket.emit('join_booking', bookingId);
+
+    // Driver location update
+    const handleDriverMoved = (data: { driverId: string; lat: number; lng: number; heading?: number }) => {
+      setDriverLocation({ lat: data.lat, lng: data.lng, heading: data.heading || 0 });
+    };
+
+    // Booking status change
+    const handleStatusChanged = (data: { bookingId: string; status: string; booking: any }) => {
+      if (data.bookingId === bookingId) {
+        setBooking(data.booking);
+        if (data.status === 'COMPLETED') {
+          setShowRatingModal(true);
+          confetti({ particleCount: 100, spread: 70, origin: { y: 0.6 } });
+        }
+      }
+    };
+
+    // In-App Call Socket Listeners
+    const handleIncomingCall = (callData: any) => {
+      if (callData.bookingId === bookingId || callData.receiverId === currentUser.id) {
+        setCallSessionId(callData.callSessionId || `call_${Date.now()}`);
+        setCallStatus('INCOMING');
+        setShowCallModal(true);
+      }
+    };
+
+    const handleCallConnected = () => {
+      setCallStatus('CONNECTED');
+    };
+
+    const handleCallDeclined = () => {
+      setCallStatus('ENDED');
+      setTimeout(() => setShowCallModal(false), 1500);
+    };
+
+    const handleCallEnded = () => {
+      setCallStatus('ENDED');
+      setTimeout(() => setShowCallModal(false), 1000);
+    };
+
+    socket.on('driver_moved', handleDriverMoved);
+    socket.on('booking_status_changed', handleStatusChanged);
+    socket.on('incoming_call', handleIncomingCall);
+    socket.on('call_connected', handleCallConnected);
+    socket.on('call_declined', handleCallDeclined);
+    socket.on('call_ended', handleCallEnded);
+
+    // Fallback polling interval
+    const interval = setInterval(loadBookingData, 4000);
+
+    return () => {
+      clearInterval(interval);
+      socket.off('driver_moved', handleDriverMoved);
+      socket.off('booking_status_changed', handleStatusChanged);
+      socket.off('incoming_call', handleIncomingCall);
+      socket.off('call_connected', handleCallConnected);
+      socket.off('call_declined', handleCallDeclined);
+      socket.off('call_ended', handleCallEnded);
+    };
+  }, [bookingId]);
+
+  const loadBookingData = async () => {
     try {
       const res = await api.getBooking(bookingId);
-      setBooking(res.booking);
-
       if (res.booking) {
-        // Calculate road route polyline
-        const routeRes = await api.calculateRoute(
-          { lat: res.booking.pickup_lat, lng: res.booking.pickup_lng },
-          { lat: res.booking.destination_lat, lng: res.booking.destination_lng }
-        );
-        setRoutePolyline(routeRes.route.polyline);
+        setBooking(res.booking);
 
         if (res.booking.driver_lat && res.booking.driver_lng) {
           setDriverLocation({
             lat: res.booking.driver_lat,
             lng: res.booking.driver_lng,
-            heading: res.booking.driver_heading || 0
+            heading: res.booking.driver_heading
           });
         }
 
-        if (res.booking.status === 'COMPLETED') {
+        // Fetch polyline route if not loaded
+        if (routePolyline.length === 0) {
+          api.calculateRoute(
+            { lat: res.booking.pickup_lat, lng: res.booking.pickup_lng },
+            { lat: res.booking.destination_lat, lng: res.booking.destination_lng }
+          ).then(routeRes => {
+            if (routeRes.polyline) setRoutePolyline(routeRes.polyline);
+          }).catch(() => {});
+        }
+
+        if (res.booking.status === 'COMPLETED' && !showRatingModal) {
           setShowRatingModal(true);
-          confetti({ particleCount: 80, spread: 70, origin: { y: 0.6 } });
         }
       }
     } catch (err) {
-      console.error('Failed to load booking:', err);
+      console.error('Error fetching booking in live tracking:', err);
     }
   };
 
-  useEffect(() => {
-    fetchBookingData();
-    socket.emit('join_booking', bookingId);
+  // Call Actions
+  const handleStartInAppCall = () => {
+    if (!booking) return;
+    const newCallSession = `call_${Date.now()}`;
+    setCallSessionId(newCallSession);
+    setCallStatus('CALLING');
+    setShowCallModal(true);
 
-    // Socket.IO listeners
-    socket.on('driver_moved', (data: any) => {
-      setDriverLocation({ lat: data.lat, lng: data.lng, heading: data.heading });
+    socket.emit('call_initiate', {
+      bookingId,
+      callSessionId: newCallSession,
+      callerId: currentUser.id,
+      callerName: currentUser.name,
+      callerRole: 'PASSENGER',
+      callerAvatar: currentUser.avatar_url,
+      receiverId: booking.driver_id,
+      receiverName: booking.driver_name || 'Captain'
     });
+  };
 
-    socket.on('booking_status_changed', (data: any) => {
-      if (data.bookingId === bookingId) {
-        setBooking(data.booking);
-        if (data.booking.status === 'COMPLETED') {
-          setShowRatingModal(true);
-          confetti({ particleCount: 100, spread: 80, origin: { y: 0.6 } });
-        }
-      }
+  const handleAcceptCall = () => {
+    setCallStatus('CONNECTED');
+    socket.emit('call_accept', {
+      bookingId,
+      callSessionId,
+      callerId: booking?.driver_id,
+      receiverId: currentUser.id
     });
+  };
 
-    socket.on('new_chat_message', (msg: any) => {
-      setChatMessages(prev => [...prev, msg]);
+  const handleRejectCall = () => {
+    setCallStatus('ENDED');
+    setShowCallModal(false);
+    socket.emit('call_reject', {
+      bookingId,
+      callSessionId,
+      callerId: booking?.driver_id,
+      receiverId: currentUser.id
     });
+  };
 
-    // Initial chat fetch
-    api.getChatMessages(bookingId).then(res => setChatMessages(res.messages || [])).catch(() => {});
-
-    // Polling backup every 5s
-    const interval = setInterval(fetchBookingData, 5000);
-    return () => {
-      clearInterval(interval);
-      socket.off('driver_moved');
-      socket.off('booking_status_changed');
-      socket.off('new_chat_message');
-    };
-  }, [bookingId]);
-
-  const handleSendChat = async (textToSend?: string) => {
-    const msg = textToSend || newMessageText;
-    if (!msg.trim()) return;
-
-    try {
-      socket.emit('send_chat_message', {
-        bookingId,
-        senderId: currentUser.id,
-        senderRole: 'PASSENGER',
-        message: msg
-      });
-      setNewMessageText('');
-    } catch (err) {
-      console.error('Chat error:', err);
-    }
+  const handleEndCall = () => {
+    setCallStatus('ENDED');
+    socket.emit('call_end', {
+      bookingId,
+      callSessionId,
+      endedBy: currentUser.name
+    });
+    setTimeout(() => setShowCallModal(false), 800);
   };
 
   const handleTriggerSOS = async () => {
+    if (!booking) return;
+    const lat = driverLocation?.lat || booking.pickup_lat;
+    const lng = driverLocation?.lng || booking.pickup_lng;
     try {
-      const lat = driverLocation?.lat || booking?.pickup_lat || 10.5276;
-      const lng = driverLocation?.lng || booking?.pickup_lng || 76.2144;
       await api.triggerSOS({
         bookingId,
         triggeredByUserId: currentUser.id,
@@ -170,16 +238,6 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
       setTimeout(() => setShareCopied(false), 3000);
     } catch (err) {
       console.error('Share error:', err);
-    }
-  };
-
-  const handleOpenMaskedCall = async () => {
-    try {
-      const res = await api.getMaskedCallSession(bookingId, currentUser.id);
-      setMaskedCallData(res);
-      setShowMaskedCall(true);
-    } catch (err) {
-      console.error('Call mask error:', err);
     }
   };
 
@@ -208,71 +266,69 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
   };
 
   const handleCancelBooking = async () => {
-    if (!confirm('Are you sure you want to cancel this ride?')) return;
+    if (!confirm('Are you sure you want to cancel this booking? A cancellation fee may apply.')) return;
     try {
-      await api.transitionBooking(bookingId, {
-        status: 'CANCELLED_BY_PASSENGER',
-        triggeredByUserId: currentUser.id,
-        cancellationReason: 'Passenger requested cancellation'
-      });
+      await api.cancelBooking(bookingId, currentUser.id, 'PASSENGER', 'Passenger cancelled in app');
       onTripFinished();
     } catch (err: any) {
-      alert(err.message);
+      alert(err.message || 'Failed to cancel booking');
     }
   };
 
   if (!booking) {
     return (
-      <div className="flex items-center justify-center p-12 text-slate-500">
-        <div className="animate-spin w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full mr-3" />
-        <span>Connecting to live driver telematics...</span>
+      <div className="flex items-center justify-center min-h-[500px]">
+        <div className="text-center space-y-3">
+          <div className="animate-spin w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full mx-auto" />
+          <p className="text-sm font-bold text-slate-400">Connecting to Live Ride Telematics...</p>
+        </div>
       </div>
     );
   }
 
-  const isDriverAssigned = [
-    'DRIVER_ASSIGNED',
-    'DRIVER_ACCEPTED',
-    'DRIVER_EN_ROUTE',
-    'DRIVER_ARRIVED',
-    'TRIP_STARTED',
-    'TRIP_IN_PROGRESS'
-  ].includes(booking.status);
+  const isDriverAssigned = !!booking.driver_id;
+  const isTripStarted = booking.status === 'TRIP_STARTED' || booking.status === 'TRIP_IN_PROGRESS';
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-4 space-y-4">
       
-      {/* Top Status Header */}
-      <div className="flex items-center justify-between p-4 bg-white dark:bg-slate-900 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800">
+      {/* Top Emergency & Status Banner */}
+      <div className="flex items-center justify-between p-4 bg-slate-900 rounded-3xl shadow-sm border border-slate-800">
         <div className="flex items-center space-x-3">
-          <div className="w-10 h-10 rounded-2xl bg-brand-500/10 text-brand-600 dark:text-brand-400 flex items-center justify-center font-bold">
-            <Car className="w-6 h-6 animate-pulse" />
+          <div className="w-10 h-10 rounded-2xl bg-brand-500/10 text-brand-400 flex items-center justify-center">
+            <Navigation className="w-5 h-5 animate-pulse" />
           </div>
           <div>
             <div className="flex items-center space-x-2">
-              <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-brand-100 dark:bg-brand-900/50 text-brand-700 dark:text-brand-300">
+              <span className="font-extrabold text-sm text-white">
                 {booking.status.replace(/_/g, ' ')}
               </span>
-              <span className="text-xs text-slate-400 font-mono">#{booking.booking_number}</span>
+              <span className="text-[10px] font-mono font-bold text-brand-400 bg-brand-950 px-2 py-0.5 rounded-full border border-brand-800">
+                #{booking.booking_number}
+              </span>
             </div>
-            <p className="text-sm font-bold text-slate-900 dark:text-white truncate max-w-xs sm:max-w-md mt-0.5">
-              {booking.destination_address}
+            <p className="text-xs text-slate-400 font-medium">
+              {isTripStarted
+                ? 'Ride is in progress to destination'
+                : isDriverAssigned
+                ? 'Captain is en route to your pickup point'
+                : 'Searching for the best rated captain nearby...'}
             </p>
           </div>
         </div>
 
-        {/* SOS Button */}
+        {/* SOS Emergency Button */}
         <button
           onClick={() => setShowSOSModal(true)}
-          className="flex items-center space-x-1.5 px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-extrabold text-xs shadow-md shadow-rose-500/30 transition-transform active:scale-95 animate-pulse"
+          className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-extrabold text-xs shadow-lg shadow-rose-600/25 transition-transform active:scale-95 flex items-center space-x-1.5"
         >
-          <AlertTriangle className="w-4 h-4" />
+          <AlertTriangle className="w-4 h-4 animate-bounce" />
           <span>SOS</span>
         </button>
       </div>
 
-      {/* Interactive Live Leaflet Map */}
-      <div className="relative w-full h-[380px] rounded-3xl overflow-hidden shadow-lg border border-slate-200 dark:border-slate-800">
+      {/* Interactive Live Map Canvas */}
+      <div className="relative w-full h-[400px] lg:h-[450px] rounded-3xl overflow-hidden shadow-xl border border-slate-800">
         <OpenStreetMap
           center={{ lat: booking.pickup_lat, lng: booking.pickup_lng }}
           pickup={{ lat: booking.pickup_lat, lng: booking.pickup_lng, address: booking.pickup_address }}
@@ -284,7 +340,7 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
                   lat: driverLocation.lat,
                   lng: driverLocation.lng,
                   heading: driverLocation.heading,
-                  name: booking.driver_name || 'Driver'
+                  name: booking.driver_name || 'Captain'
                 }
               : undefined
           }
@@ -293,7 +349,7 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
 
         {/* 4-Digit OTP Floating Badge */}
         {booking.status !== 'COMPLETED' && booking.status !== 'CANCELLED_BY_PASSENGER' && (
-          <div className="absolute top-4 left-4 z-[400] bg-slate-900/90 text-white backdrop-blur-md px-4 py-2.5 rounded-2xl shadow-xl border border-white/20 flex items-center space-x-3">
+          <div className="absolute top-4 left-4 z-[400] bg-slate-900/95 text-white backdrop-blur-md px-4 py-2.5 rounded-2xl shadow-xl border border-slate-700 flex items-center space-x-3">
             <Lock className="w-4 h-4 text-emerald-400" />
             <div>
               <p className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Start Ride PIN</p>
@@ -303,9 +359,9 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
         )}
       </div>
 
-      {/* Driver Card & Actions HUD */}
+      {/* Driver Card & Inbuilt Actions */}
       {isDriverAssigned && (
-        <div className="p-5 bg-white dark:bg-slate-900 rounded-3xl shadow-sm border border-slate-200 dark:border-slate-800 space-y-4">
+        <div className="p-5 bg-slate-900 rounded-3xl shadow-sm border border-slate-800 space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-3.5">
               <img
@@ -315,15 +371,15 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
               />
               <div>
                 <div className="flex items-center space-x-2">
-                  <h4 className="font-extrabold text-base text-slate-900 dark:text-white">{booking.driver_name}</h4>
-                  <span className="flex items-center text-xs font-bold text-amber-500 bg-amber-50 dark:bg-amber-950/40 px-1.5 py-0.5 rounded-md">
+                  <h4 className="font-extrabold text-base text-white">{booking.driver_name}</h4>
+                  <span className="flex items-center text-xs font-bold text-amber-400 bg-amber-950/60 px-1.5 py-0.5 rounded-md border border-amber-800/60">
                     ★ {booking.driver_rating || '4.9'}
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 font-medium mt-0.5">
-                  {booking.vehicle_brand} {booking.vehicle_model} • <span className="font-semibold text-slate-800 dark:text-slate-200">{booking.vehicle_color}</span>
+                <p className="text-xs text-slate-400 font-medium mt-0.5">
+                  {booking.vehicle_brand} {booking.vehicle_model} • <span className="font-semibold text-slate-200">{booking.vehicle_color}</span>
                 </p>
-                <p className="text-xs font-mono font-bold text-brand-600 dark:text-brand-400 mt-0.5">
+                <p className="text-xs font-mono font-bold text-brand-400 mt-0.5">
                   {booking.vehicle_plate}
                 </p>
               </div>
@@ -331,43 +387,45 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
 
             <div className="text-right">
               <p className="text-xs text-slate-400">Estimated Fare</p>
-              <p className="text-xl font-extrabold text-slate-900 dark:text-white">₹{booking.fare_estimate}</p>
+              <p className="text-xl font-extrabold text-white">₹{booking.fare_estimate}</p>
               <p className="text-[10px] text-slate-400">{booking.payment_method}</p>
             </div>
           </div>
 
-          {/* Action Buttons: Masked Call, Chat, Share, Cancel */}
-          <div className="grid grid-cols-4 gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+          {/* Action Grid: In-App Call, In-App Chat, Live Share, Cancel */}
+          <div className="grid grid-cols-4 gap-2 pt-2 border-t border-slate-800">
+            
+            {/* Inbuilt Call Button */}
             <button
-              onClick={handleOpenMaskedCall}
-              className="flex flex-col items-center justify-center p-2.5 bg-slate-50 dark:bg-slate-800 hover:bg-brand-50 rounded-2xl text-slate-700 dark:text-slate-300 font-semibold text-xs transition-colors"
+              onClick={handleStartInAppCall}
+              className="flex flex-col items-center justify-center p-2.5 bg-slate-950 hover:bg-emerald-950/40 rounded-2xl text-slate-200 font-semibold text-xs border border-slate-800 hover:border-emerald-800/80 transition-all active:scale-95"
             >
-              <Phone className="w-4 h-4 mb-1 text-emerald-600" />
-              <span>Call</span>
+              <Phone className="w-4 h-4 mb-1 text-emerald-400 animate-pulse" />
+              <span>In-App Call</span>
             </button>
 
+            {/* Inbuilt Chat Button */}
             <button
-              onClick={() => setShowChat(true)}
-              className="flex flex-col items-center justify-center p-2.5 bg-slate-50 dark:bg-slate-800 hover:bg-brand-50 rounded-2xl text-slate-700 dark:text-slate-300 font-semibold text-xs transition-colors relative"
+              onClick={() => setShowChatModal(true)}
+              className="flex flex-col items-center justify-center p-2.5 bg-slate-950 hover:bg-brand-950/40 rounded-2xl text-slate-200 font-semibold text-xs border border-slate-800 hover:border-brand-800/80 transition-all active:scale-95"
             >
-              <MessageSquare className="w-4 h-4 mb-1 text-brand-600" />
-              <span>Chat</span>
-              {chatMessages.length > 0 && (
-                <span className="absolute top-1 right-3 w-2 h-2 bg-brand-500 rounded-full" />
-              )}
+              <MessageSquare className="w-4 h-4 mb-1 text-brand-400" />
+              <span>Live Chat</span>
             </button>
 
+            {/* Live Share Link */}
             <button
               onClick={handleShareTrip}
-              className="flex flex-col items-center justify-center p-2.5 bg-slate-50 dark:bg-slate-800 hover:bg-brand-50 rounded-2xl text-slate-700 dark:text-slate-300 font-semibold text-xs transition-colors"
+              className="flex flex-col items-center justify-center p-2.5 bg-slate-950 hover:bg-slate-800 rounded-2xl text-slate-200 font-semibold text-xs border border-slate-800 transition-all active:scale-95"
             >
-              <Share2 className="w-4 h-4 mb-1 text-blue-600" />
-              <span>{shareCopied ? 'Copied!' : 'Share'}</span>
+              <Share2 className="w-4 h-4 mb-1 text-blue-400" />
+              <span>{shareCopied ? 'Copied!' : 'Share Trip'}</span>
             </button>
 
+            {/* Cancel Button */}
             <button
               onClick={handleCancelBooking}
-              className="flex flex-col items-center justify-center p-2.5 bg-slate-50 dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-2xl text-rose-600 font-semibold text-xs transition-colors"
+              className="flex flex-col items-center justify-center p-2.5 bg-slate-950 hover:bg-rose-950/40 rounded-2xl text-rose-400 font-semibold text-xs border border-slate-800 hover:border-rose-900 transition-all active:scale-95"
             >
               <X className="w-4 h-4 mb-1" />
               <span>Cancel</span>
@@ -376,192 +434,59 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
         </div>
       )}
 
-      {/* In-Trip Chat Drawer / Modal */}
-      {showChat && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/60 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 flex flex-col h-[500px] overflow-hidden">
-            <div className="flex items-center justify-between p-4 border-b border-slate-100 dark:border-slate-800">
-              <div className="flex items-center space-x-2">
-                <MessageSquare className="w-5 h-5 text-brand-600" />
-                <h3 className="font-bold text-slate-900 dark:text-white text-sm">
-                  Chat with {booking.driver_name || 'Driver'}
-                </h3>
-              </div>
-              <button onClick={() => setShowChat(false)} className="p-1 rounded-full text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* Inbuilt Chat Modal */}
+      <InAppChatModal
+        isOpen={showChatModal}
+        onClose={() => setShowChatModal(false)}
+        bookingId={bookingId}
+        currentUserId={currentUser.id}
+        currentUserName={currentUser.name}
+        currentUserRole="PASSENGER"
+        peerName={booking.driver_name || 'Captain'}
+        peerRole="Captain"
+        peerAvatar={booking.driver_avatar}
+      />
 
-            {/* Message Stream */}
-            <div className="flex-1 p-4 overflow-y-auto space-y-2.5 bg-slate-50/50 dark:bg-slate-950/50">
-              {chatMessages.length === 0 ? (
-                <p className="text-xs text-slate-400 text-center my-6">No messages yet. Send a quick update to your driver!</p>
-              ) : (
-                chatMessages.map((msg, i) => {
-                  const isMe = msg.senderRole === 'PASSENGER';
-                  return (
-                    <div key={i} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
-                      <div
-                        className={`max-w-[75%] px-3.5 py-2 rounded-2xl text-xs font-medium ${
-                          isMe
-                            ? 'bg-brand-600 text-white rounded-br-sm'
-                            : 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 border border-slate-200 dark:border-slate-700 rounded-bl-sm'
-                        }`}
-                      >
-                        {msg.message}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
+      {/* Inbuilt VoIP Audio Call Modal */}
+      <InAppCallModal
+        isOpen={showCallModal}
+        onClose={() => setShowCallModal(false)}
+        callStatus={callStatus}
+        bookingId={bookingId}
+        currentUserId={currentUser.id}
+        peerName={booking.driver_name || 'Captain'}
+        peerRole="Captain"
+        peerAvatar={booking.driver_avatar}
+        onAcceptCall={handleAcceptCall}
+        onRejectCall={handleRejectCall}
+        onEndCall={handleEndCall}
+      />
 
-            {/* Quick Preset Buttons */}
-            <div className="p-2 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 flex items-center space-x-1.5 overflow-x-auto text-[11px]">
-              {["I'm at the entrance", 'Please wait 2 mins', 'Where are you?', 'I have arrived'].map((preset, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleSendChat(preset)}
-                  className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-brand-50 rounded-full shrink-0 text-slate-600 dark:text-slate-300 font-medium"
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-
-            {/* Input Bar */}
-            <div className="p-3 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-slate-800 flex items-center space-x-2">
-              <input
-                type="text"
-                value={newMessageText}
-                onChange={e => setNewMessageText(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleSendChat()}
-                placeholder="Type a message..."
-                className="flex-1 px-3.5 py-2 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-brand-500"
-              />
-              <button
-                onClick={() => handleSendChat()}
-                className="p-2 bg-brand-600 hover:bg-brand-700 text-white rounded-xl shadow-md transition-transform active:scale-95"
-              >
-                <Send className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Masked Call Dialog */}
-      {showMaskedCall && maskedCallData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm">
-          <div className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl p-6 text-center shadow-2xl border border-slate-200 dark:border-slate-800">
-            <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 flex items-center justify-center mx-auto mb-3">
-              <Phone className="w-6 h-6 animate-pulse" />
-            </div>
-            <h3 className="font-bold text-base text-slate-900 dark:text-white">Anonymized Private Calling</h3>
-            <p className="text-xs text-slate-500 mt-1">Your personal phone number is protected and hidden from the driver.</p>
-
-            <div className="my-4 p-3.5 bg-slate-50 dark:bg-slate-800/80 rounded-2xl border border-slate-200 dark:border-slate-700">
-              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Virtual Bridge Number</p>
-              <p className="text-lg font-mono font-extrabold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                {maskedCallData.virtualNumber}
-              </p>
-            </div>
-
-            <button
-              onClick={() => setShowMaskedCall(false)}
-              className="w-full py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-xl font-bold text-xs"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* SOS Emergency Modal */}
-      {showSOSModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-rose-950/80 backdrop-blur-md animate-in fade-in">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl p-6 text-center shadow-2xl border-2 border-rose-500">
-            <div className="w-14 h-14 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-600 flex items-center justify-center mx-auto mb-3 ring-4 ring-rose-500/20">
-              <Shield className="w-8 h-8" />
-            </div>
-            <h3 className="font-extrabold text-lg text-slate-900 dark:text-white">Aditi Safety Shield</h3>
-            <p className="text-xs text-slate-600 dark:text-slate-400 mt-1">
-              Triggering SOS immediately notifies our 24/7 Safety Command Center, your emergency contacts, and shares live telematics.
-            </p>
-
-            {sosActive ? (
-              <div className="my-4 p-4 bg-rose-50 dark:bg-rose-950/50 rounded-2xl border border-rose-200 dark:border-rose-800 text-left">
-                <p className="text-xs font-bold text-rose-700 dark:text-rose-400 flex items-center space-x-1.5">
-                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
-                  <span>SOS Broadcast Active</span>
-                </p>
-                <p className="text-xs text-slate-700 dark:text-slate-300 mt-1">
-                  National Helpline: <b>112</b><br/>
-                  Kerala Police Emergency: <b>+91 487 242 4100</b>
-                </p>
-              </div>
-            ) : (
-              <button
-                onClick={handleTriggerSOS}
-                className="w-full mt-5 py-3.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-extrabold text-sm shadow-xl shadow-rose-600/30 transition-transform active:scale-95"
-              >
-                🚨 Trigger Emergency Alert Now
-              </button>
-            )}
-
-            <button
-              onClick={() => setShowSOSModal(false)}
-              className="w-full mt-3 py-2 text-slate-400 hover:text-slate-600 text-xs font-semibold"
-            >
-              Cancel & Return to Trip
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Post-Trip Rating & Invoice Modal */}
+      {/* 5-Star Rating & Favorite Driver Modal on Completion */}
       {showRatingModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/75 backdrop-blur-sm animate-in fade-in">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl p-6 text-center shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4">
-            
-            <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-600 flex items-center justify-center mx-auto">
-              <CheckCircle className="w-7 h-7" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in zoom-in-95">
+          <div className="w-full max-w-md bg-slate-900 rounded-3xl p-6 shadow-2xl border border-slate-800 space-y-5 text-center text-slate-100">
+            <div className="w-16 h-16 rounded-3xl bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto ring-4 ring-emerald-500/20">
+              <CheckCircle className="w-8 h-8" />
             </div>
 
-            <div>
-              <h3 className="font-extrabold text-xl text-slate-900 dark:text-white">Trip Completed!</h3>
-              <p className="text-xs text-slate-500 mt-0.5">Thank you for riding with AditiRide</p>
+            <div className="space-y-1">
+              <h3 className="text-xl font-black text-white">Ride Completed!</h3>
+              <p className="text-xs text-slate-400">Total settled: ₹{booking.final_fare || booking.fare_estimate}</p>
             </div>
 
-            {/* Digital Receipt Summary */}
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl text-left space-y-2 border border-slate-200/80 dark:border-slate-700/80 text-xs">
-              <div className="flex justify-between font-bold text-slate-900 dark:text-white text-sm pb-1 border-b border-slate-200 dark:border-slate-700">
-                <span>Final Fare</span>
-                <span className="text-emerald-600 dark:text-emerald-400">₹{booking.final_fare || booking.fare_estimate}</span>
-              </div>
-              <div className="flex justify-between text-slate-500">
-                <span>Distance & Duration</span>
-                <span>{booking.distance_km} km • {booking.duration_min} mins</span>
-              </div>
-              <div className="flex justify-between text-slate-500">
-                <span>Payment Method</span>
-                <span className="font-semibold text-slate-800 dark:text-slate-200">{booking.payment_method} (Settled)</span>
-              </div>
-            </div>
-
-            {/* 5-Star Rating Selector */}
-            <div>
-              <p className="text-xs font-bold text-slate-700 dark:text-slate-300 mb-2">Rate your driver {booking.driver_name}</p>
+            <div className="space-y-2">
+              <p className="text-xs font-bold text-slate-300">Rate your experience with {booking.driver_name}</p>
               <div className="flex items-center justify-center space-x-2">
                 {[1, 2, 3, 4, 5].map(star => (
                   <button
                     key={star}
                     onClick={() => setRatingScore(star)}
-                    className="p-1 hover:scale-125 transition-transform"
+                    className="p-1 text-2xl transition-transform hover:scale-125 focus:outline-none"
                   >
                     <Star
-                      className={`w-8 h-8 ${
-                        star <= ratingScore ? 'text-amber-400 fill-amber-400' : 'text-slate-300 dark:text-slate-700'
+                      className={`w-7 h-7 ${
+                        star <= ratingScore ? 'text-amber-400 fill-amber-400' : 'text-slate-700'
                       }`}
                     />
                   </button>
@@ -569,28 +494,65 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
               </div>
             </div>
 
-            {/* Favorite Driver Toggle */}
-            <div className="p-3 bg-brand-50/70 dark:bg-brand-950/40 rounded-2xl border border-brand-200 dark:border-brand-800/60 flex items-center justify-between text-left">
-              <div className="flex items-center space-x-2.5">
-                <Heart className="w-5 h-5 text-rose-500 fill-rose-500" />
-                <div>
-                  <p className="text-xs font-bold text-slate-900 dark:text-white">Save {booking.driver_name} as Favorite?</p>
-                  <p className="text-[10px] text-slate-500">You can request this driver directly next time</p>
-                </div>
+            {/* Favorite Captain Toggle */}
+            <div
+              onClick={() => setAddToFavorites(!addToFavorites)}
+              className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                addToFavorites
+                  ? 'bg-rose-950/40 border-rose-800 text-rose-300'
+                  : 'bg-slate-950 border-slate-800 text-slate-400'
+              }`}
+            >
+              <div className="flex items-center space-x-2.5 text-xs font-bold">
+                <Heart className={`w-4 h-4 ${addToFavorites ? 'fill-rose-500 text-rose-500' : ''}`} />
+                <span>Add {booking.driver_name} to Favorite Captains</span>
               </div>
-              <input
-                type="checkbox"
-                checked={addToFavorites}
-                onChange={e => setAddToFavorites(e.target.checked)}
-                className="w-5 h-5 accent-brand-600 rounded cursor-pointer"
-              />
+              <input type="checkbox" checked={addToFavorites} readOnly className="rounded text-rose-600" />
             </div>
 
             <button
               onClick={handleSubmitRating}
-              className="w-full py-3.5 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold text-sm shadow-lg shadow-brand-500/20"
+              className="w-full py-3.5 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-extrabold text-sm shadow-xl shadow-brand-500/25 transition-transform active:scale-95"
             >
-              Submit & Done
+              Submit & Finish
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* SOS Emergency Modal */}
+      {showSOSModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-rose-950/80 backdrop-blur-md animate-in zoom-in-95">
+          <div className="w-full max-w-md bg-slate-900 rounded-3xl p-6 shadow-2xl border-2 border-rose-600 space-y-4 text-center text-slate-100">
+            <div className="w-16 h-16 rounded-full bg-rose-600/20 text-rose-500 flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-8 h-8 animate-bounce" />
+            </div>
+            
+            <div className="space-y-1">
+              <h3 className="text-xl font-extrabold text-white">Emergency SOS Response</h3>
+              <p className="text-xs text-slate-400">
+                Triggering SOS broadcasts your live GPS coordinates directly to Kerala Police (112) and our 24/7 Safety Command Center.
+              </p>
+            </div>
+
+            {sosActive ? (
+              <div className="p-3 bg-emerald-950/80 border border-emerald-700 rounded-2xl text-xs font-bold text-emerald-300">
+                ✅ SOS Alert Dispatched! Safety team is monitoring your ride.
+              </div>
+            ) : (
+              <button
+                onClick={handleTriggerSOS}
+                className="w-full py-4 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-extrabold text-base shadow-xl shadow-rose-600/40 animate-pulse"
+              >
+                🚨 Broadcast Emergency Alert Now
+              </button>
+            )}
+
+            <button
+              onClick={() => setShowSOSModal(false)}
+              className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold text-xs"
+            >
+              Close
             </button>
           </div>
         </div>
