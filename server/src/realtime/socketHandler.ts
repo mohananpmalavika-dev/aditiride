@@ -4,82 +4,75 @@ import { verifyToken, AuthUserPayload } from '../middleware/auth.js';
 import { Booking, DriverProfile, User } from '../types/index.js';
 
 export function setupSocketHandlers(io: Server) {
-  // 1. Socket.IO Handshake Authentication Middleware
+  // 1. Mandatory Socket.IO Handshake Authentication Middleware
   io.use((socket: Socket, next) => {
     const authHeader = socket.handshake.headers?.authorization;
     const token =
       socket.handshake.auth?.token ||
       (authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null);
 
-    if (token) {
-      const user = verifyToken(token);
-      if (user) {
-        socket.data.user = user;
-      }
+    if (!token) {
+      return next(new Error('AUTH_REQUIRED'));
     }
+
+    const user = verifyToken(token);
+    if (!user) {
+      return next(new Error('INVALID_TOKEN'));
+    }
+
+    socket.data.user = user;
     next();
   });
 
   io.on('connection', (socket: Socket) => {
-    const authUser: AuthUserPayload | undefined = socket.data.user;
-    console.log(`[Socket.IO] Client connected: ${socket.id} (User: ${authUser?.id || 'Guest'})`);
-
-    // Automatically join authenticated user's private notification channel
-    if (authUser?.id) {
-      socket.join(`user_${authUser.id}`);
+    const authUser: AuthUserPayload = socket.data.user;
+    if (!authUser) {
+      socket.disconnect(true);
+      return;
     }
 
-    // Fallback explicit join (verifies user identity)
-    socket.on('join_user', (userId: string) => {
-      if (authUser && authUser.id !== userId && authUser.role !== 'SUPER_ADMIN' && authUser.role !== 'ADMIN') {
-        console.warn(`[Socket.IO Security] User ${authUser.id} attempted to join unauthorized channel user_${userId}`);
-        return;
-      }
-      socket.join(`user_${userId}`);
-    });
+    // Automatically join authenticated user's private notification room
+    socket.join(`user_${authUser.id}`);
 
     // Join room for specific booking with strict participant authorization
     socket.on('join_booking', (bookingId: string) => {
       const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [bookingId]);
       if (!booking) return;
 
-      if (authUser) {
-        const driverProfile = booking.driver_id
-          ? get<{ user_id: string }>('SELECT user_id FROM driver_profiles WHERE id = ?', [booking.driver_id])
-          : null;
+      const driverProfile = booking.driver_id
+        ? get<{ user_id: string }>('SELECT user_id FROM driver_profiles WHERE id = ?', [booking.driver_id])
+        : null;
 
-        const isPassenger = booking.passenger_id === authUser.id;
-        const isDriver = driverProfile?.user_id === authUser.id;
-        const isAdmin = authUser.role === 'SUPER_ADMIN' || authUser.role === 'ADMIN';
+      const isPassenger = booking.passenger_id === authUser.id;
+      const isDriver = driverProfile?.user_id === authUser.id;
+      const isAdmin = authUser.role === 'SUPER_ADMIN' || authUser.role === 'ADMIN';
 
-        if (!isPassenger && !isDriver && !isAdmin) {
-          console.warn(`[Socket.IO Security] Unauthorized user ${authUser.id} blocked from joining booking_${bookingId}`);
-          return;
-        }
+      if (!isPassenger && !isDriver && !isAdmin) {
+        console.warn(`[Socket.IO Security] Unauthorized user ${authUser.id} blocked from joining booking_${bookingId}`);
+        return;
       }
 
       socket.join(`booking_${bookingId}`);
     });
 
-    // Driver broadcasts GPS location (Strict Driver Authentication)
-    socket.on('driver_location_update', (data: { driverId?: string; lat: number; lng: number; heading?: number; bookingId?: string }) => {
-      let authoritativeDriverId = data.driverId;
-
-      if (authUser) {
-        if (authUser.role !== 'DRIVER' && authUser.role !== 'SUPER_ADMIN' && authUser.role !== 'ADMIN') {
-          return;
-        }
-        const profile = get<DriverProfile>('SELECT id FROM driver_profiles WHERE user_id = ?', [authUser.id]);
-        if (profile) {
-          authoritativeDriverId = profile.id;
-        }
+    // Driver broadcasts GPS location (Strict Driver Profile Identity Resolution)
+    socket.on('driver_location_update', (data: { lat: number; lng: number; heading?: number; bookingId?: string; speed?: number; accuracy?: number }) => {
+      if (authUser.role !== 'DRIVER' && authUser.role !== 'SUPER_ADMIN' && authUser.role !== 'ADMIN') {
+        return;
       }
 
-      if (!authoritativeDriverId) return;
+      const profile = get<DriverProfile>('SELECT id FROM driver_profiles WHERE user_id = ?', [authUser.id]);
+      if (!profile) return;
 
+      const authoritativeDriverId = profile.id;
       const lat = data.lat;
       const lng = data.lng;
       const heading = data.heading || 0;
+
+      // Validate geographic bounds
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        return;
+      }
 
       run(
         `UPDATE driver_profiles 
@@ -88,7 +81,7 @@ export function setupSocketHandlers(io: Server) {
         [lat, lng, heading, authoritativeDriverId]
       );
 
-      // Targeted emission: Only to active booking room and authorized fleet managers/admins
+      // Targeted emission: Only to active booking room and authorized fleet channel
       if (data.bookingId) {
         io.to(`booking_${data.bookingId}`).emit('driver_moved', {
           driverId: authoritativeDriverId,
@@ -98,7 +91,6 @@ export function setupSocketHandlers(io: Server) {
         });
       }
 
-      // Fleet/Admin authorized stream
       io.to('admin_fleet_telematics').emit('driver_telematics_fleet', {
         driverId: authoritativeDriverId,
         lat,
@@ -107,22 +99,30 @@ export function setupSocketHandlers(io: Server) {
       });
     });
 
-    // In-trip Passenger <-> Driver Chat with Server Identity Enforcement
-    socket.on('send_chat_message', (data: {
-      bookingId: string;
-      message: string;
-      receiverId?: string;
-    }) => {
+    // In-trip Passenger <-> Driver Chat with Strict Participant Authorization
+    socket.on('send_chat_message', (data: { bookingId: string; message: string; receiverId?: string }) => {
       if (!data.bookingId || !data.message?.trim()) return;
 
       const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [data.bookingId]);
       if (!booking) return;
 
-      let senderId = authUser?.id || 'usr_passenger';
-      let senderRole = authUser?.role || 'PASSENGER';
+      const driverProfile = booking.driver_id
+        ? get<{ user_id: string }>('SELECT user_id FROM driver_profiles WHERE id = ?', [booking.driver_id])
+        : null;
 
+      const isPassenger = booking.passenger_id === authUser.id;
+      const isDriver = driverProfile?.user_id === authUser.id;
+      const isAdmin = authUser.role === 'SUPER_ADMIN' || authUser.role === 'ADMIN';
+
+      if (!isPassenger && !isDriver && !isAdmin) {
+        console.warn(`[Socket.IO Security] Unauthorized chat attempt on booking ${data.bookingId} by user ${authUser.id}`);
+        return;
+      }
+
+      const senderId = authUser.id;
+      const senderRole = authUser.role;
       const userRecord = get<User>('SELECT name FROM users WHERE id = ?', [senderId]);
-      const senderName = userRecord?.name || 'User';
+      const senderName = userRecord?.name || authUser.name || 'User';
 
       const msgId = `msg_${Date.now()}`;
       run(`
@@ -146,48 +146,69 @@ export function setupSocketHandlers(io: Server) {
       }
     });
 
-    // In-App VoIP Audio Call Signaling
+    // In-App VoIP Audio Call Signaling with Strict Participant Verification
     socket.on('call_initiate', (data: {
       bookingId: string;
-      callerId?: string;
-      callerName?: string;
-      callerRole?: 'PASSENGER' | 'DRIVER';
       callerAvatar?: string;
       receiverId: string;
       receiverName: string;
     }) => {
-      const callerId = authUser?.id || data.callerId || 'usr_passenger';
-      const callerRole = authUser?.role === 'DRIVER' ? 'DRIVER' : 'PASSENGER';
-      const callerUser = get<User>('SELECT name, avatar_url FROM users WHERE id = ?', [callerId]);
+      const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [data.bookingId]);
+      if (!booking) return;
 
-      const callSessionId = `call_${Date.now()}`;
-      const callData = {
-        ...data,
-        callerId,
-        callerRole,
-        callerName: callerUser?.name || data.callerName || 'User',
-        callerAvatar: callerUser?.avatar_url || data.callerAvatar,
+      const driverProfile = booking.driver_id
+        ? get<{ user_id: string }>('SELECT user_id FROM driver_profiles WHERE id = ?', [booking.driver_id])
+        : null;
+
+      const isPassenger = booking.passenger_id === authUser.id;
+      const isDriver = driverProfile?.user_id === authUser.id;
+
+      if (!isPassenger && !isDriver) {
+        return;
+      }
+
+      const callerId = authUser.id;
+      const callerRole = isDriver ? 'DRIVER' : 'PASSENGER';
+      const userRecord = get<User>('SELECT name, avatar_url FROM users WHERE id = ?', [callerId]);
+      const callerName = userRecord?.name || authUser.name || 'Caller';
+      const callerAvatar = userRecord?.avatar_url || data.callerAvatar;
+
+      const callSessionId = `call_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+
+      io.to(`user_${data.receiverId}`).emit('incoming_call', {
         callSessionId,
-        timestamp: Date.now(),
-        virtualRelayNumber: '+91 484-719-0099'
-      };
-
-      io.to(`user_${data.receiverId}`).emit('incoming_call', callData);
-      io.to(`booking_${data.bookingId}`).emit('call_ringing', callData);
+        bookingId: data.bookingId,
+        callerId,
+        callerName,
+        callerRole,
+        callerAvatar,
+        receiverId: data.receiverId,
+        receiverName: data.receiverName,
+        createdAt: new Date().toISOString()
+      });
     });
 
-    socket.on('call_accept', (data: { bookingId: string; callSessionId: string; callerId: string; receiverId: string }) => {
-      io.to(`user_${data.callerId}`).emit('call_connected', data);
-      io.to(`booking_${data.bookingId}`).emit('call_connected', data);
+    socket.on('call_answer', (data: { callSessionId: string; bookingId: string; callerId: string }) => {
+      io.to(`user_${data.callerId}`).emit('call_connected', {
+        callSessionId: data.callSessionId,
+        bookingId: data.bookingId,
+        answeredBy: authUser.id
+      });
     });
 
-    socket.on('call_reject', (data: { bookingId: string; callSessionId: string; callerId: string; receiverId: string }) => {
-      io.to(`user_${data.callerId}`).emit('call_declined', data);
-      io.to(`booking_${data.bookingId}`).emit('call_declined', data);
+    socket.on('call_reject', (data: { callSessionId: string; callerId: string; reason?: string }) => {
+      io.to(`user_${data.callerId}`).emit('call_declined', {
+        callSessionId: data.callSessionId,
+        rejectedBy: authUser.id,
+        reason: data.reason || 'User busy'
+      });
     });
 
-    socket.on('call_end', (data: { bookingId: string; callSessionId: string; endedBy: string }) => {
-      io.to(`booking_${data.bookingId}`).emit('call_ended', data);
+    socket.on('call_end', (data: { callSessionId: string; peerUserId: string }) => {
+      io.to(`user_${data.peerUserId}`).emit('call_ended', {
+        callSessionId: data.callSessionId,
+        endedBy: authUser.id
+      });
     });
   });
 }

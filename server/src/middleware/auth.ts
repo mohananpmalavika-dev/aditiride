@@ -2,8 +2,12 @@ import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'aditiride_production_jwt_sec_2026_x89f4b9a1c';
-export const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'aditiride_refresh_sec_2026_d7a2e5c';
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET)) {
+  throw new Error('CRITICAL SECURITY ERROR: JWT_SECRET and JWT_REFRESH_SECRET must be explicitly configured in production environment.');
+}
+
+export const JWT_SECRET = process.env.JWT_SECRET || 'aditiride_dev_jwt_sec_2026_x89f4b9a1c';
+export const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'aditiride_dev_refresh_sec_2026_d7a2e5c';
 export const ACCESS_TOKEN_TTL = '15m';
 export const REFRESH_TOKEN_TTL = '30d';
 

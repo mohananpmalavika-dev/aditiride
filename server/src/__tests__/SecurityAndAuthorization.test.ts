@@ -151,7 +151,6 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       const paymentResult = PaymentService.processPayment(
         bookingId,
         'usr_passenger',
-        authoritativeAmount,
         'WALLET',
         `idem_key_${Date.now()}`
       );
@@ -338,6 +337,87 @@ describe('P0 Security & Authorization Hardening Tests', () => {
 
       // Clean up
       run(`DELETE FROM driver_profiles WHERE id = ?`, [testDriverId]);
+    });
+  });
+
+  describe('11. CSPRNG Trip PIN Hashing, Attempt Counter & Lockout', () => {
+    it('should generate high-entropy 4-digit PINs and lockout on excessive failed attempts', () => {
+      const pin1 = SafetyService.generateTripOtp();
+      const pin2 = SafetyService.generateTripOtp();
+
+      expect(pin1.length).toBe(4);
+      expect(pin2.length).toBe(4);
+      expect(Number(pin1)).toBeGreaterThanOrEqual(1000);
+      expect(Number(pin1)).toBeLessThanOrEqual(9999);
+
+      const bookingId = 'bk_pin_lockout_test';
+      SafetyService.registerTripOtp(bookingId, '4829', 60);
+
+      // Failed attempt 1 to 4
+      expect(SafetyService.verifyTripOtp(bookingId, '1111')).toBe(false);
+      expect(SafetyService.verifyTripOtp(bookingId, '2222')).toBe(false);
+      expect(SafetyService.verifyTripOtp(bookingId, '3333')).toBe(false);
+      expect(SafetyService.verifyTripOtp(bookingId, '4444')).toBe(false);
+
+      // Failed attempt 5 -> lock out triggered
+      expect(SafetyService.verifyTripOtp(bookingId, '5555')).toBe(false);
+
+      // 6th attempt should throw lockout error
+      expect(() => {
+        SafetyService.verifyTripOtp(bookingId, '4829');
+      }).toThrow(/Maximum OTP verification attempts exceeded/);
+    });
+  });
+
+  describe('12. 256-Bit Live Share Token Lifecycle & Persistence', () => {
+    it('should persist live share tokens as SHA-256 hashes and validate active tokens', () => {
+      const bookingId = 'bk_share_lifecycle_test';
+      const share = SafetyService.generateLiveShareToken(bookingId, 'usr_passenger');
+
+      expect(share.token.startsWith('share_')).toBe(true);
+      expect(share.token.length).toBeGreaterThanOrEqual(64);
+
+      // Token lookup in database must be hashed
+      const validation = SafetyService.validateLiveShareToken(share.token);
+      expect(validation.isValid).toBe(true);
+      expect(validation.bookingId).toBe(bookingId);
+
+      // Fake token rejected
+      const invalidValidation = SafetyService.validateLiveShareToken('share_invalid_token_12345');
+      expect(invalidValidation.isValid).toBe(false);
+    });
+  });
+
+  describe('13. Authoritative Server-Derived Payment (No Client Amount Accepted)', () => {
+    it('should derive payment amount directly from authoritative booking record', () => {
+      const bookingId = 'bk_sec_amount_derive_test';
+      run(`
+        INSERT OR REPLACE INTO bookings (
+          id, booking_number, passenger_id, driver_id, vehicle_category_id, booking_type,
+          pickup_lat, pickup_lng, pickup_address, destination_lat, destination_lng, destination_address,
+          distance_km, duration_min, otp_code, fare_estimate, final_fare, fare_source, fare_rule_version,
+          surge_multiplier, payment_method, payment_status, status
+        ) VALUES (
+          ?, 'ADITI-PAY-TEST-99', 'usr_passenger', 'drv_rahul', 'cat_sedan', 'INSTANT',
+          10.5276, 76.2144, 'A', 10.5360, 76.2220, 'B',
+          6.0, 18, '5821', 220.0, 245.0, 'FINAL_CALC', 'v2.0',
+          1.0, 'WALLET', 'PENDING', 'COMPLETED'
+        )
+      `, [bookingId]);
+
+      run(`UPDATE wallets SET balance = 5000.0 WHERE user_id = 'usr_passenger'`);
+
+      // PaymentService.processPayment only takes (bookingId, userId, paymentMethod, idempotencyKey)
+      const res = PaymentService.processPayment(
+        bookingId,
+        'usr_passenger',
+        'WALLET',
+        `idem_sec_pay_${Date.now()}`
+      );
+
+      // Must charge authoritative final_fare (245.0)
+      expect(res.payment.amount).toBe(245.0);
+      expect(res.payment.status).toBe('COMPLETED');
     });
   });
 });

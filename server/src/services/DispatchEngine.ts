@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { get, query, run } from '../db/index.js';
+import { get, query, run, transaction } from '../db/index.js';
 import { MatchingEngine, MatchedDriver } from './MatchingEngine.js';
 import { Booking, DriverProfile } from '../types/index.js';
 
@@ -56,37 +56,39 @@ export class DispatchEngine {
     bookingId: string,
     leaseDurationSec: number = DispatchEngine.LEASE_DURATION_SECONDS
   ): boolean {
-    const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + leaseDurationSec * 1000).toISOString();
+    return transaction(() => {
+      const now = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + leaseDurationSec * 1000).toISOString();
 
-    // Check if driver is currently leased or active on trip
-    const existingLease = get<{ driver_id: string; lease_expires_at: string; status: string }>(
-      `SELECT * FROM driver_leases WHERE driver_id = ? AND status = 'OFFERED' AND lease_expires_at > ?`,
-      [driverId, now]
-    );
+      // Check if driver is currently leased or active on trip
+      const existingLease = get<{ driver_id: string; lease_expires_at: string; status: string }>(
+        `SELECT * FROM driver_leases WHERE driver_id = ? AND status = 'OFFERED' AND lease_expires_at > ?`,
+        [driverId, now]
+      );
 
-    if (existingLease) {
-      return false; // Driver already in active offer lease
-    }
+      if (existingLease) {
+        return false; // Driver already in active offer lease
+      }
 
-    const driverProfile = get<DriverProfile>(
-      `SELECT * FROM driver_profiles WHERE id = ? AND availability_status = 'ONLINE' AND verification_status = 'VERIFIED'`,
-      [driverId]
-    );
+      const driverProfile = get<DriverProfile>(
+        `SELECT * FROM driver_profiles WHERE id = ? AND availability_status = 'ONLINE' AND verification_status = 'VERIFIED'`,
+        [driverId]
+      );
 
-    if (!driverProfile) {
-      return false;
-    }
+      if (!driverProfile) {
+        return false;
+      }
 
-    // Atomically upsert lease
-    run(
-      `INSERT INTO driver_leases (driver_id, booking_id, status, lease_expires_at)
-       VALUES (?, ?, 'OFFERED', ?)
-       ON CONFLICT(driver_id) DO UPDATE SET booking_id = ?, status = 'OFFERED', lease_expires_at = ?`,
-      [driverId, bookingId, expiresAt, bookingId, expiresAt]
-    );
+      // Atomically upsert lease
+      run(
+        `INSERT INTO driver_leases (driver_id, booking_id, status, lease_expires_at)
+         VALUES (?, ?, 'OFFERED', ?)
+         ON CONFLICT(driver_id) DO UPDATE SET booking_id = ?, status = 'OFFERED', lease_expires_at = ?`,
+        [driverId, bookingId, expiresAt, bookingId, expiresAt]
+      );
 
-    return true;
+      return true;
+    });
   }
 
   /**

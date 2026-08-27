@@ -421,6 +421,9 @@ apiRouter.post('/bookings', authenticateToken, async (req: Request, res: Respons
     quote.fare_rule_version, quote.surge_multiplier, paymentMethod || 'UPI', initialStatus
   ]);
 
+  // Register cryptographic hashed OTP verification record
+  SafetyService.registerTripOtp(bookingId, otpCode);
+
   // Insert Stops if provided
   if (stops && Array.isArray(stops)) {
     stops.forEach((stop, idx) => {
@@ -1036,14 +1039,8 @@ apiRouter.post('/wallet/pay', authenticateToken, (req: Request, res: Response) =
   const idempotencyKey = (req.headers['idempotency-key'] as string) || `pay_key_${Date.now()}`;
   const { bookingId, paymentMethod } = req.body;
 
-  // Server authoritatively derives amount from database snapshot (prevents client price tampering)
-  const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [bookingId]);
-  if (!booking) return res.status(404).json({ error: 'Booking not found' });
-
-  const payableAmount = booking.final_fare || booking.fare_estimate;
-
   try {
-    const result = PaymentService.processPayment(bookingId, authReq.user.id, payableAmount, paymentMethod || 'UPI', idempotencyKey);
+    const result = PaymentService.processPayment(bookingId, authReq.user.id, paymentMethod || 'UPI', idempotencyKey);
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });

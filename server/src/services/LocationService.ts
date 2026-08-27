@@ -167,18 +167,7 @@ export class LocationService {
     const localMatches = PRELOADED_LANDMARKS.filter(
       loc => loc.name.toLowerCase().includes(q) || loc.address.toLowerCase().includes(q)
     );
-    if (localMatches.length > 0) return localMatches;
-
-    return [
-      {
-        id: `dyn_${Date.now()}`,
-        name: queryStr,
-        address: `${queryStr}, Kerala`,
-        lat: 10.5276 + (Math.random() - 0.5) * 0.04,
-        lng: 76.2144 + (Math.random() - 0.5) * 0.04,
-        type: 'LANDMARK'
-      }
-    ];
+    return localMatches;
   }
 
   /**

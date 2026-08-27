@@ -1,6 +1,7 @@
 import { query, get, run } from '../db/index.js';
 import { Booking, BookingStatus, DriverProfile, VehicleCategory, User } from '../types/index.js';
 import { FareEngine } from './FareEngine.js';
+import { SafetyService } from './SafetyService.js';
 
 export class BookingStateMachine {
   private static readonly VALID_TRANSITIONS: Record<BookingStatus, BookingStatus[]> = {
@@ -100,7 +101,11 @@ export class BookingStateMachine {
 
     // 2. Verification for Starting Trip: Mandatory 4-digit OTP
     if (newStatus === 'TRIP_STARTED') {
-      if (!metadata.otp || metadata.otp.trim() !== booking.otp_code.trim()) {
+      if (!metadata.otp) {
+        throw new Error('Invalid passenger OTP. Please enter the 4-digit OTP shown on the passenger screen.');
+      }
+      const isValid = SafetyService.verifyTripOtp(bookingId, metadata.otp.trim());
+      if (!isValid) {
         throw new Error('Invalid passenger OTP. Please enter the correct 4-digit OTP shown on the passenger screen.');
       }
     }

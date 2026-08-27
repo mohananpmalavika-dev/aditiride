@@ -74,11 +74,38 @@ export function get<T = any>(sql: string, params: any[] = []): T | undefined {
   return results[0];
 }
 
+let inTransaction = false;
+
 export function run(sql: string, params: any[] = []): { changes: number } {
   if (!dbInstance) throw new Error('Database not initialized');
   dbInstance.run(sql, params);
-  saveDb();
+  if (!inTransaction) {
+    saveDb();
+  }
   return { changes: 1 };
+}
+
+export function transaction<T>(fn: () => T): T {
+  if (!dbInstance) throw new Error('Database not initialized');
+  if (inTransaction) {
+    return fn();
+  }
+
+  inTransaction = true;
+  dbInstance.run('BEGIN TRANSACTION;');
+  try {
+    const result = fn();
+    dbInstance.run('COMMIT;');
+    inTransaction = false;
+    saveDb();
+    return result;
+  } catch (error) {
+    try {
+      dbInstance.run('ROLLBACK;');
+    } catch {}
+    inTransaction = false;
+    throw error;
+  }
 }
 
 function seedDatabase(db: Database) {

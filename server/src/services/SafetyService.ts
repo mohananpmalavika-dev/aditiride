@@ -5,10 +5,65 @@ import { SOSEvent, SOSStatus, Booking } from '../types/index.js';
 
 export class SafetyService {
   /**
-   * Generate a secure 4-digit numeric OTP for trip start verification
+   * Generate a cryptographically secure 4-digit numeric OTP using CSPRNG
    */
   public static generateTripOtp(): string {
-    return Math.floor(1000 + Math.random() * 9000).toString();
+    return crypto.randomInt(1000, 10000).toString();
+  }
+
+  /**
+   * Register and hash trip OTP with attempt tracking and expiry
+   */
+  public static registerTripOtp(bookingId: string, otp: string, ttlMinutes: number = 120): void {
+    const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+    const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000).toISOString();
+
+    run(
+      `INSERT INTO booking_otp_verifications (booking_id, otp_hash, attempts, max_attempts, expires_at)
+       VALUES (?, ?, 0, 5, ?)
+       ON CONFLICT(booking_id) DO UPDATE SET otp_hash = ?, attempts = 0, expires_at = ?, used_at = NULL`,
+      [bookingId, otpHash, expiresAt, otpHash, expiresAt]
+    );
+  }
+
+  /**
+   * Verify trip OTP with brute-force lockout and expiry guardrails
+   */
+  public static verifyTripOtp(bookingId: string, inputOtp: string): boolean {
+    const record = get<{ otp_hash: string; attempts: number; max_attempts: number; expires_at: string; used_at?: string }>(
+      'SELECT * FROM booking_otp_verifications WHERE booking_id = ?',
+      [bookingId]
+    );
+
+    if (!record) {
+      // Fallback verification against booking table if verification record is missing
+      const booking = get<Booking>('SELECT otp_code FROM bookings WHERE id = ?', [bookingId]);
+      return booking?.otp_code === inputOtp;
+    }
+
+    if (record.used_at) {
+      throw new Error('Trip PIN has already been used.');
+    }
+
+    if (new Date() > new Date(record.expires_at)) {
+      throw new Error('Trip PIN has expired. Please request a new PIN from passenger.');
+    }
+
+    if (record.attempts >= record.max_attempts) {
+      throw new Error('Maximum OTP verification attempts exceeded. Ride locked for passenger safety.');
+    }
+
+    // Increment attempts
+    run(`UPDATE booking_otp_verifications SET attempts = attempts + 1 WHERE booking_id = ?`, [bookingId]);
+
+    const inputHash = crypto.createHash('sha256').update(inputOtp).digest('hex');
+    const isValid = record.otp_hash === inputHash;
+
+    if (isValid) {
+      run(`UPDATE booking_otp_verifications SET used_at = datetime('now') WHERE booking_id = ?`, [bookingId]);
+    }
+
+    return isValid;
   }
 
   /**
@@ -96,14 +151,45 @@ export class SafetyService {
   }
 
   /**
-   * Generate cryptographically secure 256-bit live trip tracking share link
+   * Generate cryptographically secure 256-bit live trip tracking share link with persistent hash lifecycle
    */
-  public static generateLiveShareToken(bookingId: string): { shareUrl: string; token: string } {
-    const secureRandomToken = crypto.randomBytes(32).toString('hex');
-    const token = `share_${secureRandomToken}`;
+  public static generateLiveShareToken(bookingId: string, createdByUserId?: string): { shareUrl: string; token: string; expiresAt: string } {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const token = `share_${rawToken}`;
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // 24 hours
+
+    const shareId = `shr_${uuidv4().substring(0, 8)}`;
+    const creator = createdByUserId || 'usr_passenger';
+
+    run(
+      `INSERT INTO trip_share_tokens (id, token_hash, booking_id, created_by, expires_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [shareId, tokenHash, bookingId, creator, expiresAt]
+    );
+
     return {
       shareUrl: `/track/live/${token}`,
-      token
+      token,
+      expiresAt
     };
+  }
+
+  /**
+   * Validate and resolve live share token
+   */
+  public static validateLiveShareToken(token: string): { isValid: boolean; bookingId?: string } {
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const record = get<{ booking_id: string; expires_at: string; revoked_at?: string }>(
+      'SELECT booking_id, expires_at, revoked_at FROM trip_share_tokens WHERE token_hash = ?',
+      [tokenHash]
+    );
+
+    if (!record || record.revoked_at || new Date() > new Date(record.expires_at)) {
+      return { isValid: false };
+    }
+
+    run(`UPDATE trip_share_tokens SET last_accessed_at = datetime('now') WHERE token_hash = ?`, [tokenHash]);
+    return { isValid: true, bookingId: record.booking_id };
   }
 }

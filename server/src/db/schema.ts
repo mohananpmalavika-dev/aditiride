@@ -489,6 +489,47 @@ CREATE TABLE IF NOT EXISTS ledger_entries (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Trip Live-Share Tokens with Cryptographic Hash Lifecycle
+CREATE TABLE IF NOT EXISTS trip_share_tokens (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT UNIQUE NOT NULL,
+  booking_id TEXT NOT NULL REFERENCES bookings(id),
+  created_by TEXT NOT NULL REFERENCES users(id),
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  last_accessed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Payment Intents & Real Gateway State Machine
+CREATE TABLE IF NOT EXISTS payment_intents (
+  id TEXT PRIMARY KEY,
+  booking_id TEXT NOT NULL REFERENCES bookings(id),
+  user_id TEXT NOT NULL REFERENCES users(id),
+  amount_paise INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'INR',
+  provider TEXT NOT NULL, -- 'RAZORPAY', 'CASHFREE', 'UPI_INTENT', 'WALLET', 'CASH'
+  provider_order_id TEXT UNIQUE,
+  provider_payment_id TEXT,
+  signature TEXT,
+  status TEXT NOT NULL DEFAULT 'CREATED', -- 'CREATED', 'PENDING', 'AUTHORIZED', 'CAPTURED', 'FAILED', 'REFUNDED'
+  idempotency_key TEXT UNIQUE NOT NULL,
+  metadata_json TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Booking Cryptographic OTP Verification Guardrails
+CREATE TABLE IF NOT EXISTS booking_otp_verifications (
+  booking_id TEXT PRIMARY KEY REFERENCES bookings(id),
+  otp_hash TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  max_attempts INTEGER NOT NULL DEFAULT 5,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for lightning fast geospatial & lifecycle queries
 CREATE INDEX IF NOT EXISTS idx_driver_status ON driver_profiles(availability_status, verification_status);
 CREATE INDEX IF NOT EXISTS idx_driver_location ON driver_profiles(current_lat, current_lng);
@@ -502,4 +543,6 @@ CREATE INDEX IF NOT EXISTS idx_fav_pass_driver ON favorites(passenger_id, driver
 CREATE INDEX IF NOT EXISTS idx_block_users ON user_blocks(blocker_user_id, blocked_user_id, status);
 CREATE INDEX IF NOT EXISTS idx_state_events_booking ON booking_state_events(booking_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_driver_leases ON driver_leases(driver_id, status, lease_expires_at);
+CREATE INDEX IF NOT EXISTS idx_trip_share_token_hash ON trip_share_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_payment_intents_order ON payment_intents(provider_order_id, status);
 `;
