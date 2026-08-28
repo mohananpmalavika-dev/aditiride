@@ -296,10 +296,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ nextStatus: 'TRIP_STARTED', actorRole: 'DRIVER', otp })
     }),
+  updateTripWaiting: (bookingId: string, payload: { waitingMinutes: number; waitingStatus?: string; action?: 'START' | 'PAUSE' | 'RESUME' | 'STOP' }) =>
+    fetchApi(`/bookings/${bookingId}/waiting`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
   completeTrip: (bookingId: string, payload?: any) =>
     fetchApi(`/bookings/${bookingId}/transition`, {
       method: 'POST',
-      body: JSON.stringify({ nextStatus: 'COMPLETED', actorRole: 'DRIVER', metadata: payload })
+      body: JSON.stringify({
+        nextStatus: 'COMPLETED',
+        actorRole: 'DRIVER',
+        finalDistanceKm: payload?.actualDistanceKm,
+        finalDurationMin: payload?.actualDurationMin,
+        waitingMinutes: payload?.waitingMinutes,
+        waitingFare: payload?.waitingFare,
+        metadata: payload
+      })
     }),
   cancelBooking: (bookingId: string, userId: string, userRole: string, reason?: string) =>
     fetchApi(`/bookings/${bookingId}/transition`, {
@@ -365,5 +378,50 @@ export const api = {
     return fetchApi(`/admin/complaints?${q.toString()}`);
   },
   resolveComplaint: (id: string, payload: any) =>
-    fetchApi(`/admin/complaints/${id}/resolve`, { method: 'PUT', body: JSON.stringify(payload) })
+    fetchApi(`/admin/complaints/${id}/resolve`, { method: 'PUT', body: JSON.stringify(payload) }),
+
+  // Lost & Found (PRD §14.3)
+  reportLostItem: (payload: any) => fetchApi('/lost-and-found', { method: 'POST', body: JSON.stringify(payload) }),
+  getMyLostItems: () => fetchApi('/lost-and-found'),
+  getAdminLostItems: () => fetchApi('/admin/lost-and-found'),
+  updateLostItemStatus: (id: string, payload: { status: string; driverNotes?: string }) =>
+    fetchApi(`/lost-and-found/${id}/status`, { method: 'PATCH', body: JSON.stringify(payload) }),
+
+  // Recurring Rides (PRD §8.2)
+  getRecurringSeries: () => fetchApi('/recurring-series'),
+  createRecurringSeries: (payload: any) => fetchApi('/recurring-series', { method: 'POST', body: JSON.stringify(payload) }),
+  skipRecurringDate: (id: string, dateToSkip: string) => fetchApi(`/recurring-series/${id}/skip-date`, { method: 'POST', body: JSON.stringify({ dateToSkip }) }),
+  updateRecurringStatus: (id: string, status: string) => fetchApi(`/recurring-series/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+
+  // Loyalty & Ride Passes & Referrals (PRD §13)
+  getLoyaltyStatus: () => fetchApi('/loyalty/status'),
+  getRidePasses: () => fetchApi('/passes'),
+  getUserRidePasses: () => fetchApi('/passes/user'),
+  buyRidePass: (passId: string) => fetchApi(`/passes/${passId}/buy`, { method: 'POST' }),
+  getReferrals: () => fetchApi('/referrals'),
+  applyReferral: (referralCode: string) => fetchApi('/referrals/apply', { method: 'POST', body: JSON.stringify({ referralCode }) }),
+
+  // Driver Compliance & Documents (PRD §9.5 & §15)
+  getDriverComplianceDocs: () => fetchApi('/driver/compliance-docs'),
+  uploadDriverComplianceDoc: (payload: any) => fetchApi('/driver/compliance-docs', { method: 'POST', body: JSON.stringify(payload) }),
+  getAdminComplianceDocs: () => fetchApi('/admin/compliance-docs'),
+  verifyComplianceDoc: (id: string, payload: { status: 'APPROVED' | 'REJECTED'; rejectionReason?: string }) =>
+    fetchApi(`/admin/compliance-docs/${id}/verify`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  // System Audit Logs & RBAC (PRD §15 & Appendix A)
+  getAdminAuditLogs: () => fetchApi('/admin/audit-logs'),
+  verifyAuditLogChain: () => fetchApi('/admin/audit-logs/verify-chain'),
+  getAdminRbacRoles: () => fetchApi('/admin/rbac/roles'),
+  getFeatures: () => fetchApi('/features'),
+  getAdminFeatures: () => fetchApi('/admin/features'),
+
+  // Driver Earnings Simulator (PRD §9.4)
+  simulateDriverEarnings: (params: { baseFare?: number; perKmRate?: number; estimatedTripsPerDay?: number; avgDistanceKm?: number }) => {
+    const q = new URLSearchParams();
+    if (params.baseFare) q.append('baseFare', params.baseFare.toString());
+    if (params.perKmRate) q.append('perKmRate', params.perKmRate.toString());
+    if (params.estimatedTripsPerDay) q.append('estimatedTripsPerDay', params.estimatedTripsPerDay.toString());
+    if (params.avgDistanceKm) q.append('avgDistanceKm', params.avgDistanceKm.toString());
+    return fetchApi(`/driver/earnings-simulator?${q.toString()}`);
+  }
 };

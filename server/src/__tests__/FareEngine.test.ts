@@ -125,4 +125,24 @@ describe('Authoritative FareEngine Tests', () => {
     expect(quoteRajClose.pickup_distance_charge).toBe(0);
     expect(quoteRaj.total_fare).toBe(quoteRajClose.total_fare + 15.0);
   });
+
+  it('calculates intermediate waiting period charge correctly in FareEngine', () => {
+    // Sedan category waiting_rate is 3.0 / min
+    const quoteWithoutWaiting = FareEngine.calculateFare({
+      vehicleCategoryId: 'cat_sedan',
+      distanceKm: 10.0,
+      durationMin: 25,
+      waitingMinutes: 0
+    });
+
+    const quoteWithWaiting = FareEngine.calculateFare({
+      vehicleCategoryId: 'cat_sedan',
+      distanceKm: 10.0,
+      durationMin: 25,
+      waitingMinutes: 10 // 10 mins @ ₹3.0 = ₹30.0 waiting fare
+    });
+
+    expect(quoteWithWaiting.waiting_fare).toBe(30.0);
+    expect(quoteWithWaiting.total_fare).toBeGreaterThan(quoteWithoutWaiting.total_fare);
+  });
 });

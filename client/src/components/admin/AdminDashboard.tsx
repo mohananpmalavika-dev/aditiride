@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { User, LanguageCode, VehicleCategory } from '../../types/index.js';
 import { api } from '../../services/api.js';
 import { OpenStreetMap } from '../common/OpenStreetMap.js';
+import { AdminAuditAndComplianceModal } from './AdminAuditAndComplianceModal.js';
+import { LostAndFoundModal } from '../common/LostAndFoundModal.js';
 import {
   Shield,
   Activity,
@@ -19,7 +21,9 @@ import {
   Zap,
   Lock,
   Layers,
-  ShieldAlert
+  ShieldAlert,
+  PackageSearch,
+  ShieldCheck
 } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -58,6 +62,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
 
   // Editing Category state
   const [editingCategory, setEditingCategory] = useState<VehicleCategory | null>(null);
+  const [showComplianceModal, setShowComplianceModal] = useState(false);
+  const [showLostAndFoundModal, setShowLostAndFoundModal] = useState(false);
 
   const loadAdminData = async () => {
     try {
@@ -164,7 +170,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
           </div>
         </div>
 
-        {/* Tab Navigation */}
+        {/* Tab Navigation & PRD Action Buttons */}
         <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-800 rounded-2xl border border-slate-700">
           {[
             { id: 'OPERATIONS', label: 'Live Ops', icon: Activity },
@@ -190,6 +196,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
               </button>
             );
           })}
+
+          <button
+            onClick={() => setShowComplianceModal(true)}
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-950/80 hover:bg-indigo-900 border border-indigo-700/60 text-indigo-300 transition-colors"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
+            <span>KYC & Audit Hub</span>
+          </button>
+
+          <button
+            onClick={() => setShowLostAndFoundModal(true)}
+            className="flex items-center space-x-1 px-3 py-1.5 rounded-xl text-xs font-bold bg-sky-950/80 hover:bg-sky-900 border border-sky-700/60 text-sky-300 transition-colors"
+          >
+            <PackageSearch className="w-3.5 h-3.5 text-sky-400" />
+            <span>Lost & Found</span>
+          </button>
         </div>
       </div>
 
@@ -665,6 +687,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ currentUser, lan
             </div>
           </div>
         </div>
+      )}
+
+      {/* Compliance & Audit Governance Hub (PRD §15 & Appendix A) */}
+      {showComplianceModal && (
+        <AdminAuditAndComplianceModal
+          currentUser={currentUser}
+          onClose={() => setShowComplianceModal(false)}
+        />
+      )}
+
+      {/* Lost & Found Desk (PRD §14.3) */}
+      {showLostAndFoundModal && (
+        <LostAndFoundModal
+          currentUser={currentUser}
+          onClose={() => setShowLostAndFoundModal(false)}
+        />
       )}
 
     </div>

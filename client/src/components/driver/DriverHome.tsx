@@ -7,6 +7,8 @@ import { OpenStreetMap } from '../common/OpenStreetMap.js';
 import { InAppChatModal } from '../common/InAppChatModal.js';
 import { InAppCallModal, CallStatus } from '../common/InAppCallModal.js';
 import { ComplaintCenterModal } from '../common/ComplaintCenterModal.js';
+import { DriverEarningsSimulatorModal } from './DriverEarningsSimulatorModal.js';
+import { LostAndFoundModal } from '../common/LostAndFoundModal.js';
 import {
   Power,
   CheckCircle,
@@ -36,7 +38,8 @@ import {
   ShieldAlert,
   ThumbsUp,
   ThumbsDown,
-  Heart
+  Heart,
+  PackageSearch
 } from 'lucide-react';
 
 interface DriverHomeProps {
@@ -53,6 +56,11 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
 
   // Voice Alert Settings
   const [voiceAlertsEnabled, setVoiceAlertsEnabled] = useState(true);
+
+  // Intermediate In-Trip Waiting Period & Surcharge Tracker
+  const [isWaitingActive, setIsWaitingActive] = useState(false);
+  const [waitingSeconds, setWaitingSeconds] = useState(0);
+  const [waitingRatePerMin, setWaitingRatePerMin] = useState(2.5);
 
   // In-App Chat & In-App Call
   const [showChatModal, setShowChatModal] = useState(false);
@@ -85,6 +93,8 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   const [selectedPassengerTags, setSelectedPassengerTags] = useState<string[]>([]);
   const [blockPassengerAfterTrip, setBlockPassengerAfterTrip] = useState(false);
   const [showComplaintModal, setShowComplaintModal] = useState(false);
+  const [showEarningsSimulatorModal, setShowEarningsSimulatorModal] = useState(false);
+  const [showLostAndFoundModal, setShowLostAndFoundModal] = useState(false);
 
   // Earnings
   const [earnings, setEarnings] = useState<{ todayEarnings: number; totalGrossFare: number; totalCommissionPaid: number; history: any[] }>({
@@ -144,39 +154,114 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
 
   // Voice Announcement when offer arrives
   const speakVoiceAlert = (offerData: any) => {
-    if (!('speechSynthesis' in window)) return;
-    window.speechSynthesis.cancel();
-    const passenger = offerData.passengerName || 'Passenger';
-    const destination = (offerData.destinationAddress || 'Destination').split(',')[0];
-    const fare = Math.round(offerData.fareEstimate || offerData.fare || 150);
+    if (!voiceAlertsEnabled) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const passenger = offerData.passengerName || offerData.passenger_name || 'Passenger';
+      const rawPickup = offerData.pickupAddress || offerData.pickup_address || 'Current Location';
+      const rawDest = offerData.destinationAddress || offerData.destination_address || 'Destination';
+      const rawStop = offerData.stopAddress || offerData.stop_address;
+      const pickup = rawPickup.split(',')[0].trim();
+      const destination = rawDest.split(',')[0].trim();
+      const stop = rawStop ? rawStop.split(',')[0].trim() : '';
+      const waitingMins = offerData.waitingMinutes || offerData.waiting_minutes || 0;
+      const waitingRate = offerData.waitingRate || offerData.waiting_rate || 2.5;
+      const fare = Math.round(offerData.fareEstimate || offerData.fare || 150);
+      const distance = offerData.distanceKm ? `${Math.round(offerData.distanceKm)} km` : '';
 
-    let spokenText = '';
-    let voiceLang = 'en-IN';
+      let spokenText = '';
+      let voiceLang = 'en-IN';
 
-    if (language === 'ml' || currentUser.preferred_language === 'ml') {
-      spokenText = `ശ്രദ്ധിക്കുക ക്യാപ്റ്റൻ! പുതിയ റൈഡ് ബുക്കിംഗ് എത്തിയിട്ടുണ്ട്. ${passenger} ൽ നിന്നും ${destination} ലേക്ക്. ഏകദേശ നിരക്ക് ${fare} രൂപ. സ്വീകരിക്കുക.`;
-      voiceLang = 'ml-IN';
-    } else if (language === 'hi' || currentUser.preferred_language === 'hi') {
-      spokenText = `ध्यान दें कैप्टन! नया राइड अनुरोध। यात्री ${passenger}। गंतव्य ${destination}। अनुमानित किराया ${fare} रुपये। कृपया स्वीकार करें।`;
-      voiceLang = 'hi-IN';
-    } else if (language === 'ta' || currentUser.preferred_language === 'ta') {
-      spokenText = `புதிய சவாரி முன்பதிவு வந்துள்ளது! கட்டணம் ${fare} ரூபாய். தயவுசெய்து ஏற்கவும்.`;
-      voiceLang = 'ta-IN';
-    } else {
-      spokenText = `Attention Captain! New ride booking request from ${passenger} to ${destination}. Estimated fare ${fare} Rupees. Please accept within 20 seconds.`;
-      voiceLang = 'en-IN';
+      if (language === 'ml' || currentUser.preferred_language === 'ml') {
+        const favPrefix = offerData.isFavoriteRequest ? 'നിങ്ങളുടെ പ്രിയപ്പെട്ട യാത്രക്കാരൻ! ' : '';
+        const stopSegment = (stop || waitingMins > 0)
+          ? ` ഇടയ്ക്കുള്ള വെയ്റ്റിംഗ് സ്റ്റോപ്പ്: ${stop || 'ഇടത്താവളം'}, വെയ്റ്റിംഗ് സമയം: ${waitingMins || 5} മിനിറ്റ്, വെയ്റ്റിംഗ് ചാർജ്: മിനിറ്റിന് ${waitingRate} രൂപ.`
+          : '';
+        spokenText = `ശ്രദ്ധിക്കുക ക്യാപ്റ്റൻ! പുതിയ റൈഡ് അഭ്യർത്ഥന എത്തിയിട്ടുണ്ട്. ${favPrefix}യാത്രക്കാരന്റെ പേര്: ${passenger}. പിക്കപ്പ് സ്ഥലം: ${pickup}.${stopSegment} ഡ്രോപ്പ് സ്ഥലം: ${destination}. ഏകദേശ നിരക്ക് ${fare} രൂപ. സ്വീകരിക്കുക.`;
+        voiceLang = 'ml-IN';
+      } else if (language === 'hi' || currentUser.preferred_language === 'hi') {
+        const stopSegment = (stop || waitingMins > 0)
+          ? ` बीच का स्टॉप: ${stop || 'प्रतीक्षा बिंदु'}, प्रतीक्षा समय: ${waitingMins || 5} मिनट, वेटिंग चार्ज: ${waitingRate} रुपये प्रति मिनट।`
+          : '';
+        spokenText = `ध्यान दें कैप्टन! नया राइड अनुरोध। यात्री का नाम: ${passenger}। पिकअप स्थान: ${pickup}।${stopSegment} ड्रॉप स्थान: ${destination}। अनुमानित किराया ${fare} रुपये। कृपया स्वीकार करें।`;
+        voiceLang = 'hi-IN';
+      } else if (language === 'ta' || currentUser.preferred_language === 'ta') {
+        const stopSegment = (stop || waitingMins > 0)
+          ? ` இடைப்பட்ட நிறுத்தம்: ${stop || 'காத்திருப்பு இடம்'}, காத்திருப்பு நேரம்: ${waitingMins || 5} நிமிடங்கள்.`
+          : '';
+        spokenText = `கவனம் கேப்டன்! புதிய சவாரி கோரிக்கை. பயணி பெயர்: ${passenger}. ஏறும் இடம்: ${pickup}.${stopSegment} இறங்கும் இடம்: ${destination}. கட்டணம் ${fare} ரூபாய். தயவுசெய்து ஏற்கவும்.`;
+        voiceLang = 'ta-IN';
+      } else {
+        const favPrefix = offerData.isFavoriteRequest ? 'Favorite Passenger Request! ' : '';
+        const stopSegment = (stop || waitingMins > 0)
+          ? ` Intermediate waiting stop: ${stop || 'Stopover'}, waiting period: ${waitingMins || 5} minutes, waiting charge: ${waitingRate} Rupees per minute.`
+          : '';
+        spokenText = `Attention Captain! New ride request. ${favPrefix}Passenger name: ${passenger}. Pickup from: ${pickup}.${stopSegment} Drop location: ${destination}. Estimated fare: ${fare} Rupees. Please accept within 20 seconds.`;
+        voiceLang = 'en-IN';
+      }
+
+      const utterance = new SpeechSynthesisUtterance(spokenText);
+      utterance.lang = voiceLang;
+      utterance.rate = 1.0;
+      utterance.volume = 1.0;
+
+      const voices = window.speechSynthesis.getVoices();
+      const matchingVoice = voices.find(v => v.lang && v.lang.startsWith(voiceLang.slice(0, 2)));
+      if (matchingVoice) utterance.voice = matchingVoice;
+
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('Driver voice alert error:', e);
     }
+  };
 
-    const utterance = new SpeechSynthesisUtterance(spokenText);
-    utterance.lang = voiceLang;
-    utterance.rate = 1.05;
-    utterance.volume = 1.0;
+  // Waiting timer tick effect
+  useEffect(() => {
+    let interval: any = null;
+    if (isWaitingActive && activeTrip) {
+      interval = setInterval(() => {
+        setWaitingSeconds(prev => prev + 1);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [isWaitingActive, activeTrip]);
 
-    const voices = window.speechSynthesis.getVoices();
-    const matchingVoice = voices.find(v => v.lang.startsWith(voiceLang.slice(0, 2)));
-    if (matchingVoice) utterance.voice = matchingVoice;
+  const accumulatedWaitingFare = Math.round((waitingSeconds / 60) * waitingRatePerMin * 100) / 100;
+  const currentTotalTripFare = Math.round(((activeTrip?.fare_estimate || 0) + accumulatedWaitingFare) * 100) / 100;
 
-    window.speechSynthesis.speak(utterance);
+  const handleToggleWaitingTimer = async () => {
+    if (!activeTrip) return;
+    const newWaitingState = !isWaitingActive;
+    setIsWaitingActive(newWaitingState);
+
+    const elapsedMins = Math.round((waitingSeconds / 60) * 10) / 10;
+    try {
+      await api.updateTripWaiting(activeTrip.id, {
+        waitingMinutes: elapsedMins,
+        waitingStatus: newWaitingState ? 'WAITING' : 'PAUSED',
+        action: newWaitingState ? 'START' : 'PAUSE'
+      });
+
+      // Voice notification to Captain
+      if (voiceAlertsEnabled && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const msg = newWaitingState
+          ? (language === 'ml' || currentUser.preferred_language === 'ml'
+              ? `ഇടയ്ക്കുള്ള വെയ്റ്റിംഗ് സമയം ആരംഭിച്ചു. വെയ്റ്റിംഗ് നിരക്ക് മിനിറ്റിന് ₹${waitingRatePerMin} രൂപ.`
+              : `Intermediate waiting period started. Waiting charge rate is ₹${waitingRatePerMin} per minute.`)
+          : (language === 'ml' || currentUser.preferred_language === 'ml'
+              ? `വെയ്റ്റിംഗ് സമയം താൽക്കാലികമായി നിർത്തി. ആകെ വെയ്റ്റിംഗ് ചാർജ്: ₹${accumulatedWaitingFare} രൂപ.`
+              : `Waiting period paused. Accumulated waiting charge is ₹${accumulatedWaitingFare} Rupees.`);
+        const utt = new SpeechSynthesisUtterance(msg);
+        utt.lang = (language === 'ml' || currentUser.preferred_language === 'ml') ? 'ml-IN' : 'en-IN';
+        window.speechSynthesis.speak(utt);
+      }
+    } catch (e) {
+      console.warn('Could not sync waiting status:', e);
+    }
   };
 
   // ==========================================
@@ -243,36 +328,18 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   };
 
   // ==========================================
-  // 2. PHOTO / SCAN OTP CAPTURE
+  // 2. SCAN / PHOTO PIN VERIFICATION
   // ==========================================
   const handlePhotoCaptureOtp = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    setScannerStatus('Processing photo with optical reader...');
-    setShowCameraScanner(true);
-
-    // Simulate instant AI OCR extraction from passenger screen photo
-    setTimeout(() => {
-      if (activeTrip && activeTrip.otp_code) {
-        setOtpInput(activeTrip.otp_code);
-        setScannerStatus(`✓ Successfully extracted PIN #${activeTrip.otp_code}`);
-        setTimeout(() => {
-          setShowCameraScanner(false);
-          handleVerifyOtpDirect(activeTrip.otp_code);
-        }, 800);
-      } else {
-        // Fallback random 4 digits
-        const extracted = '5821';
-        setOtpInput(extracted);
-        setShowCameraScanner(false);
-        handleVerifyOtpDirect(extracted);
-      }
-    }, 1200);
+    setScannerStatus('Photo selected. Please enter the 4-digit PIN confirmed with passenger.');
+    setShowCameraScanner(false);
   };
 
   // ==========================================
-  // 3. PROXIMITY / NFC AUTO-HANDSHAKE (< 50m)
+  // 3. PROXIMITY DETECTION (< 50m)
   // ==========================================
   useEffect(() => {
     if (activeTrip && activeTrip.status === 'DRIVER_ARRIVED' && driverProfile) {
@@ -282,21 +349,18 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
       const pLng = activeTrip.pickup_lng;
 
       const distMeters = calculateDistanceMeters(driverLat, driverLng, pLat, pLng);
-      // If within 50 meters or simulated nearby
-      setProximityDistanceMeters(distMeters <= 50 ? distMeters : 28);
+      setProximityDistanceMeters(distMeters <= 50 ? distMeters : null);
     } else {
       setProximityDistanceMeters(null);
     }
   }, [activeTrip, driverProfile]);
 
-  const handleProximityAutoHandshake = () => {
-    if (!activeTrip || !activeTrip.otp_code) return;
-    setOtpInput(activeTrip.otp_code);
-    handleVerifyOtpDirect(activeTrip.otp_code);
+  const handleProximityPrompt = () => {
+    setScannerStatus('Proximity verified at pickup location. Please request passenger 4-digit PIN.');
   };
 
   const handleVerifyOtpDirect = async (codeToVerify: string) => {
-    if (!activeTrip) return;
+    if (!activeTrip || !codeToVerify.trim()) return;
     setOtpError('');
     try {
       const res = await api.startTripWithOTP(activeTrip.id, codeToVerify.trim());
@@ -304,7 +368,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
       setOtpInput('');
       playChimeSound();
     } catch (err: any) {
-      setOtpError(err.message || 'Invalid PIN code. Please verify with the passenger.');
+      setOtpError(err.message || 'Invalid PIN code. Please check with passenger.');
     }
   };
 
@@ -527,14 +591,19 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
   const handleCompleteTrip = async () => {
     if (!activeTrip) return;
     try {
+      setIsWaitingActive(false);
+      const elapsedMins = Math.round((waitingSeconds / 60) * 10) / 10;
       const res = await api.completeTrip(activeTrip.id, {
         actualDistanceKm: activeTrip.distance_km,
-        actualDurationMin: activeTrip.duration_min
+        actualDurationMin: activeTrip.duration_min,
+        waitingMinutes: elapsedMins,
+        waitingFare: accumulatedWaitingFare
       });
       const finished = res.booking || activeTrip;
       setCompletedTripForRating(finished);
       setActiveTrip(null);
       setPassengerLiveLocation(null);
+      setWaitingSeconds(0);
       setShowDriverRatingModal(true);
       loadDriverData();
     } catch (err: any) {
@@ -690,6 +759,22 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
           </button>
 
           <button
+            onClick={() => setShowEarningsSimulatorModal(true)}
+            className="flex items-center space-x-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-2xl text-xs font-bold text-emerald-300 transition-colors border border-slate-700"
+          >
+            <TrendingUp className="w-4 h-4 text-emerald-400" />
+            <span>Simulator</span>
+          </button>
+
+          <button
+            onClick={() => setShowLostAndFoundModal(true)}
+            className="flex items-center space-x-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-2xl text-xs font-bold text-sky-300 transition-colors border border-slate-700"
+          >
+            <PackageSearch className="w-4 h-4 text-sky-400" />
+            <span>Lost & Found</span>
+          </button>
+
+          <button
             onClick={() => setShowComplaintModal(true)}
             className="flex items-center space-x-1.5 px-3 py-2 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 rounded-2xl text-xs font-bold text-rose-300 transition-colors"
           >
@@ -816,17 +901,17 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
                           <Wifi className="w-4 h-4" />
                         </div>
                         <div>
-                          <p className="text-xs font-black text-emerald-300">Passenger Proximity Detected!</p>
+                          <p className="text-xs font-black text-emerald-300">Passenger Proximity Confirmed</p>
                           <p className="text-[10px] text-emerald-400 font-semibold">
-                            Within {proximityDistanceMeters}m range • NFC/Bluetooth Token Valid
+                            Within {proximityDistanceMeters}m range • Ask passenger for 4-digit PIN
                           </p>
                         </div>
                       </div>
                       <button
-                        onClick={handleProximityAutoHandshake}
+                        onClick={handleProximityPrompt}
                         className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl shadow-md transition-transform active:scale-95 shrink-0"
                       >
-                        ⚡ Auto-Start
+                        ✓ Arrived
                       </button>
                     </div>
                   )}
@@ -887,7 +972,7 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
                         maxLength={4}
                         value={otpInput}
                         onChange={e => setOtpInput(e.target.value)}
-                        placeholder="Type 4 digits (e.g. 5821)"
+                        placeholder="Enter 4-digit passenger PIN"
                         className="w-full text-center text-3xl font-mono font-black tracking-widest py-3 bg-slate-950 rounded-2xl border-2 border-slate-700 text-white focus:outline-none focus:border-brand-500 shadow-inner"
                       />
                       {otpInput.length === 4 && (
@@ -907,12 +992,74 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
 
                 </div>
               ) : activeTrip.status === 'TRIP_STARTED' || activeTrip.status === 'TRIP_IN_PROGRESS' ? (
-                <button
-                  onClick={handleCompleteTrip}
-                  className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-extrabold text-sm shadow-xl shadow-emerald-600/30 transition-transform active:scale-98"
-                >
-                  🏁 Arrived at Destination • End Trip (Collect ₹{activeTrip.fare_estimate})
-                </button>
+                <div className="space-y-3.5">
+                  {/* Intermediate Waiting Timer & Surcharge Hub */}
+                  <div className="p-4 bg-gradient-to-r from-amber-950/40 via-slate-900 to-amber-950/40 rounded-2xl border border-amber-500/40 shadow-lg space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <div className={`w-8 h-8 rounded-xl flex items-center justify-center font-bold ${
+                          isWaitingActive ? 'bg-amber-500 text-slate-950 animate-pulse' : 'bg-slate-800 text-slate-300'
+                        }`}>
+                          <Clock className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <span className="text-xs font-black text-amber-300">
+                            {isWaitingActive ? '⏳ Active Waiting Period' : 'Intermediate Waiting Period'}
+                          </span>
+                          <p className="text-[10px] text-slate-400">Rate: ₹{waitingRatePerMin}/min</p>
+                        </div>
+                      </div>
+
+                      <div className="text-right font-mono">
+                        <span className="text-lg font-black text-white">
+                          {String(Math.floor(waitingSeconds / 60)).padStart(2, '0')}:{String(waitingSeconds % 60).padStart(2, '0')}
+                        </span>
+                        <p className="text-[11px] font-bold text-amber-400">+₹{accumulatedWaitingFare}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={handleToggleWaitingTimer}
+                        className={`flex-1 py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center space-x-1.5 transition-all shadow-md active:scale-95 ${
+                          isWaitingActive
+                            ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 font-black ring-2 ring-amber-400/40'
+                            : 'bg-slate-800 hover:bg-slate-750 text-amber-300 border border-amber-500/30'
+                        }`}
+                      >
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>{isWaitingActive ? '⏸️ Pause Waiting' : '▶️ Start Waiting / വെയ്റ്റിംഗ്'}</span>
+                      </button>
+
+                      {waitingSeconds > 0 && !isWaitingActive && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setWaitingSeconds(0);
+                            if (activeTrip) {
+                              api.updateTripWaiting(activeTrip.id, { waitingMinutes: 0, action: 'STOP' });
+                            }
+                          }}
+                          className="px-3 py-2.5 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 transition-colors"
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Arrived at Destination & End Trip */}
+                  <button
+                    onClick={handleCompleteTrip}
+                    className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-extrabold text-sm shadow-xl shadow-emerald-600/30 transition-transform active:scale-98 flex items-center justify-center space-x-2"
+                  >
+                    <span>🏁 Arrived at Destination • End Trip</span>
+                    <span className="bg-emerald-950 px-2 py-0.5 rounded-lg text-emerald-300 font-mono text-xs">
+                      Total: ₹{currentTotalTripFare}
+                    </span>
+                  </button>
+                </div>
               ) : null}
 
             </div>
@@ -978,10 +1125,21 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in zoom-in-95">
           <div className="w-full max-w-md bg-slate-900 rounded-3xl p-6 shadow-2xl border-2 border-brand-500 space-y-4 text-center">
             
-            {/* Top Voice Alert Badge */}
-            <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-emerald-950/80 border border-emerald-700 rounded-full text-[11px] font-bold text-emerald-400 mx-auto">
-              <Volume2 className="w-3.5 h-3.5 animate-bounce" />
-              <span>Voice Alert Active • Announcing Offer</span>
+            {/* Top Voice Alert Badge & Instant Replay Button */}
+            <div className="flex items-center justify-center space-x-2">
+              <div className="inline-flex items-center space-x-1.5 px-3 py-1 bg-emerald-950/90 border border-emerald-700/80 rounded-full text-[11px] font-bold text-emerald-400">
+                <Volume2 className="w-3.5 h-3.5 animate-bounce" />
+                <span>Voice Alert Active</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => speakVoiceAlert(incomingOffer)}
+                className="inline-flex items-center space-x-1 px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 rounded-full text-[11px] font-bold text-amber-300 transition-colors active:scale-95"
+                title="Re-announce ride details via voice"
+              >
+                <Radio className="w-3 h-3 animate-pulse text-amber-400" />
+                <span>🔊 Replay / വീണ്ടും കേൾക്കുക</span>
+              </button>
             </div>
 
             <div className="relative w-16 h-16 mx-auto flex items-center justify-center">
@@ -999,18 +1157,41 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
                 ₹{incomingOffer.fareEstimate || incomingOffer.fare}
               </h3>
               <p className="text-xs text-slate-400">
-                Passenger: <span className="font-bold text-white">{incomingOffer.passengerName}</span> • {incomingOffer.distanceKm || '4.2'} km
+                Distance: <span className="font-bold text-white">{incomingOffer.distanceKm || '4.2'} km</span> • {incomingOffer.durationMin || '15'} mins
               </p>
             </div>
 
-            <div className="p-3.5 bg-slate-950 rounded-2xl text-xs space-y-2 text-left border border-slate-800">
-              <div>
-                <p className="text-[10px] text-slate-500 font-bold uppercase">Pickup Location</p>
-                <p className="font-semibold text-white truncate">{incomingOffer.pickupAddress}</p>
+            {/* Detailed Passenger & Journey Info */}
+            <div className="p-4 bg-slate-950 rounded-2xl text-xs space-y-3 text-left border border-slate-800">
+              <div className="flex items-center space-x-3 pb-2.5 border-b border-slate-800/80">
+                <div className="w-8 h-8 rounded-xl bg-brand-500/20 text-brand-400 flex items-center justify-center font-bold text-base ring-1 ring-brand-500/30">
+                  👤
+                </div>
+                <div className="flex-1">
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Passenger Name (യാത്രക്കാരൻ)</p>
+                  <p className="font-extrabold text-white text-sm">{incomingOffer.passengerName || 'Passenger'}</p>
+                </div>
+                {incomingOffer.isFavoriteRequest && (
+                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                    ⭐ Direct Dispatch
+                  </span>
+                )}
               </div>
-              <div>
-                <p className="text-[10px] text-slate-500 font-bold uppercase">Destination</p>
-                <p className="font-semibold text-white truncate">{incomingOffer.destinationAddress}</p>
+
+              <div className="flex items-start space-x-2.5">
+                <div className="w-3 h-3 rounded-full bg-emerald-400 mt-1 shrink-0 ring-4 ring-emerald-400/20" />
+                <div className="flex-1">
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">From (Pickup Location / പിക്കപ്പ്)</p>
+                  <p className="font-bold text-white text-xs leading-snug">{incomingOffer.pickupAddress}</p>
+                </div>
+              </div>
+
+              <div className="flex items-start space-x-2.5">
+                <div className="w-3 h-3 rounded-full bg-rose-400 mt-1 shrink-0 ring-4 ring-rose-400/20" />
+                <div className="flex-1">
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">To (Destination Location / ഡ്രോപ്പ്)</p>
+                  <p className="font-bold text-white text-xs leading-snug">{incomingOffer.destinationAddress}</p>
+                </div>
               </div>
             </div>
 
@@ -1319,6 +1500,23 @@ export const DriverHome: React.FC<DriverHomeProps> = ({ currentUser, language })
         currentUser={currentUser}
         preselectedBooking={activeTrip || completedTripForRating}
       />
+
+      {/* Driver Earnings Simulator (PRD §9.4) */}
+      {showEarningsSimulatorModal && (
+        <DriverEarningsSimulatorModal
+          currentUser={currentUser}
+          driverProfile={driverProfile}
+          onClose={() => setShowEarningsSimulatorModal(false)}
+        />
+      )}
+
+      {/* Lost & Found Support Desk (PRD §14.3) */}
+      {showLostAndFoundModal && (
+        <LostAndFoundModal
+          currentUser={currentUser}
+          onClose={() => setShowLostAndFoundModal(false)}
+        />
+      )}
 
     </div>
   );

@@ -42,6 +42,8 @@ export class BookingStateMachine {
       cancellationReason?: string;
       finalDistanceKm?: number;
       finalDurationMin?: number;
+      waitingMinutes?: number;
+      waitingFare?: number;
     } = {}
   ): Booking {
     const booking = get<Booking>('SELECT * FROM bookings WHERE id = ?', [bookingId]);
@@ -143,28 +145,33 @@ export class BookingStateMachine {
     } else if (newStatus === 'TRIP_STARTED') {
       run(`UPDATE bookings SET status = ?, started_at = ? WHERE id = ?`, [newStatus, now, bookingId]);
     } else if (newStatus === 'COMPLETED') {
-      // Authoritative final fare calculation based on real distance & duration
+      // Authoritative final fare calculation based on real distance, duration, and waiting period
       const actualDistance = metadata.finalDistanceKm || booking.distance_km || 4.5;
       const actualDuration = metadata.finalDurationMin || booking.duration_min || 15;
+      const waitingMins = metadata.waitingMinutes !== undefined ? metadata.waitingMinutes : (booking.waiting_minutes || 0.0);
 
       let finalFare = booking.fare_estimate;
+      let calculatedWaitingFare = metadata.waitingFare || 0.0;
+
       try {
         const quote = FareEngine.calculateFare({
           vehicleCategoryId: booking.vehicle_category_id,
           distanceKm: actualDistance,
           durationMin: actualDuration,
+          waitingMinutes: waitingMins,
           pickupLat: booking.pickup_lat,
           pickupLng: booking.pickup_lng,
           driverId: booking.driver_id || undefined
         });
         finalFare = quote.total_fare;
+        calculatedWaitingFare = quote.waiting_fare || 0.0;
       } catch (err) {
-        finalFare = booking.fare_estimate;
+        finalFare = booking.fare_estimate + calculatedWaitingFare;
       }
 
       run(
-        `UPDATE bookings SET status = ?, completed_at = ?, distance_km = ?, duration_min = ?, final_fare = ?, payment_status = 'COMPLETED' WHERE id = ?`,
-        [newStatus, now, actualDistance, actualDuration, finalFare, bookingId]
+        `UPDATE bookings SET status = ?, completed_at = ?, distance_km = ?, duration_min = ?, waiting_minutes = ?, waiting_fare = ?, waiting_status = 'COMPLETED', final_fare = ?, payment_status = 'COMPLETED' WHERE id = ?`,
+        [newStatus, now, actualDistance, actualDuration, waitingMins, calculatedWaitingFare, finalFare, bookingId]
       );
 
       if (booking.driver_id) {

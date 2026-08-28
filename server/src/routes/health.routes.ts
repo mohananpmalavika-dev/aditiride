@@ -57,3 +57,24 @@ healthRouter.get('/ready', async (_req: Request, res: Response) => {
     res.status(503).json({ status: 'NOT_READY', error: err.message });
   }
 });
+
+healthRouter.get('/startup', (_req: Request, res: Response) => {
+  try {
+    const userCount = get<{ count: number }>('SELECT COUNT(*) as count FROM users');
+    const categoryCount = get<{ count: number }>('SELECT COUNT(*) as count FROM vehicle_categories');
+    
+    if (userCount === undefined || categoryCount === undefined) {
+      return res.status(503).json({ status: 'STARTING', reason: 'Core database migrations not finished' });
+    }
+
+    res.json({
+      status: 'STARTED',
+      tablesLoaded: true,
+      userCount: userCount.count,
+      categoryCount: categoryCount.count,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    res.status(503).json({ status: 'STARTING', error: err.message });
+  }
+});

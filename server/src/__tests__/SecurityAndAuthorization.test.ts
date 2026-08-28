@@ -80,7 +80,7 @@ describe('P0 Security & Authorization Hardening Tests', () => {
       const blockerId = 'usr_passenger';
       const blockedDriver = 'usr_driver_rahul';
 
-      run(`DELETE FROM user_blocks WHERE blocker_user_id = ? AND blocked_user_id = ?`, [blockerId, blockedDriver]);
+      run(`DELETE FROM user_blocks WHERE blocker_user_id = ?`, [blockerId]);
 
       run(`
         INSERT INTO user_blocks (id, blocker_user_id, blocked_user_id, reason, block_type, status, created_by)

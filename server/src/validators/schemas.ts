@@ -35,7 +35,14 @@ export const createBookingSchema = z.object({
     lat: z.number(),
     lng: z.number(),
     address: z.string()
-  })).optional()
+  })).optional(),
+  isBookingForOther: z.boolean().optional(),
+  riderName: z.string().optional(),
+  riderPhone: z.string().optional(),
+  riderPaymentMode: z.enum(['BOOKER_PAYS', 'RIDER_PAYS_CASH']).optional(),
+  recurringSeriesId: z.string().optional(),
+  stopAddress: z.string().optional(),
+  waitingMinutes: z.number().optional()
 });
 
 export const rateBookingSchema = z.object({

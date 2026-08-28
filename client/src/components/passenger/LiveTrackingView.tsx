@@ -8,6 +8,7 @@ import { OpenStreetMap } from '../common/OpenStreetMap.js';
 import { InAppChatModal } from '../common/InAppChatModal.js';
 import { InAppCallModal, CallStatus } from '../common/InAppCallModal.js';
 import { ComplaintCenterModal } from '../common/ComplaintCenterModal.js';
+import { LostAndFoundModal } from '../common/LostAndFoundModal.js';
 import {
   Shield,
   Phone,
@@ -26,7 +27,9 @@ import {
   Car,
   Volume2,
   QrCode,
-  ShieldAlert
+  ShieldAlert,
+  PackageSearch,
+  ShieldCheck
 } from 'lucide-react';
 
 interface LiveTrackingViewProps {
@@ -63,6 +66,9 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [addToFavorites, setAddToFavorites] = useState(false);
   const [showComplaintModal, setShowComplaintModal] = useState(false);
+  const [showLostAndFoundModal, setShowLostAndFoundModal] = useState(false);
+  const [showSafetyCheckin, setShowSafetyCheckin] = useState(false);
+  const [waitingInfo, setWaitingInfo] = useState<{ waitingMinutes: number; waitingFare: number; waitingRate: number; waitingStatus: string } | null>(null);
 
   const socket = getSocket();
 
@@ -216,6 +222,23 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
       );
     }
 
+    const handleWaitingUpdated = (data: { bookingId: string; waitingMinutes: number; waitingFare: number; waitingRate: number; waitingStatus: string }) => {
+      if (data.bookingId === bookingId) {
+        setWaitingInfo(data);
+        if (data.waitingStatus === 'WAITING' && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+          const spoken = (language === 'ml' || currentUser.preferred_language === 'ml')
+            ? `ശ്രദ്ധിക്കുക! ക്യാപ്റ്റൻ ഇടയ്ക്കുള്ള വെയ്റ്റിംഗ് ആരംഭിച്ചിട്ടുണ്ട്. നിരക്ക് മിനിറ്റിന് ₹${data.waitingRate} രൂപ.`
+            : `Notice: Captain has started intermediate waiting. Waiting rate is ₹${data.waitingRate} per minute.`;
+          const utt = new SpeechSynthesisUtterance(spoken);
+          utt.lang = (language === 'ml' || currentUser.preferred_language === 'ml') ? 'ml-IN' : 'en-IN';
+          window.speechSynthesis.speak(utt);
+        }
+      }
+    };
+
+    socket.on('trip_waiting_updated', handleWaitingUpdated);
+
     // Fallback polling only when socket is disconnected
     const interval = setInterval(() => {
       if (!socket.connected) {
@@ -230,6 +253,7 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
       clearInterval(interval);
       socket.off('driver_moved', handleDriverMoved);
       socket.off('booking_status_changed', handleStatusChanged);
+      socket.off('trip_waiting_updated', handleWaitingUpdated);
       socket.off('incoming_call', handleIncomingCall);
       socket.off('call_connected', handleCallConnected);
       socket.off('call_declined', handleCallDeclined);
@@ -242,6 +266,15 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
       const res = await api.getBooking(bookingId);
       if (res.booking) {
         setBooking(res.booking);
+
+        if (res.booking.waiting_minutes !== undefined) {
+          setWaitingInfo({
+            waitingMinutes: res.booking.waiting_minutes || 0,
+            waitingFare: res.booking.waiting_fare || 0,
+            waitingRate: res.booking.waiting_rate || 2.5,
+            waitingStatus: res.booking.waiting_status || 'NONE'
+          });
+        }
 
         if (res.booking.driver_lat && res.booking.driver_lng) {
           setDriverLocation({
@@ -525,6 +558,39 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
         </div>
       )}
 
+      {/* Live Intermediate Waiting Surcharge Banner */}
+      {waitingInfo && (waitingInfo.waitingStatus === 'WAITING' || waitingInfo.waitingMinutes > 0) && (
+        <div className="p-4 bg-gradient-to-r from-amber-950/80 via-slate-900 to-amber-950/80 border-2 border-amber-500/60 rounded-3xl flex items-center justify-between animate-in zoom-in-95 shadow-lg shadow-amber-500/10">
+          <div className="flex items-center space-x-3">
+            <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold ${
+              waitingInfo.waitingStatus === 'WAITING' ? 'bg-amber-500 text-slate-950 animate-pulse' : 'bg-slate-800 text-amber-300'
+            }`}>
+              <Clock className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center space-x-2">
+                <h4 className="font-extrabold text-sm text-white">
+                  {waitingInfo.waitingStatus === 'WAITING' ? '⏳ Captain is Waiting (ഇടയ്ക്കുള്ള വെയ്റ്റിംഗ്)' : 'Intermediate Waiting Tracked'}
+                </h4>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  ₹{waitingInfo.waitingRate}/min
+                </span>
+              </div>
+              <p className="text-xs text-amber-200/90 mt-0.5">
+                Elapsed: <span className="font-mono font-bold text-white">{waitingInfo.waitingMinutes} mins</span> • Waiting Charge: <span className="font-black text-amber-300 font-mono">+₹{waitingInfo.waitingFare}</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="text-right font-mono">
+            <p className="text-[10px] text-slate-400 font-bold uppercase">Estimated Fare</p>
+            <p className="text-lg font-black text-white">
+              ₹{Math.round(((booking.fare_estimate || 0) + (waitingInfo.waitingFare || 0)) * 100) / 100}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Driver Card & Inbuilt Actions */}
       {isDriverAssigned && (
         <div className="p-5 bg-slate-900 rounded-3xl shadow-sm border border-slate-800 space-y-4">
@@ -754,9 +820,9 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
             </div>
             
             <div className="space-y-1">
-              <h3 className="text-xl font-extrabold text-white">Emergency SOS Response</h3>
+              <h3 className="text-xl font-extrabold text-white">Emergency Safety Response</h3>
               <p className="text-xs text-slate-400">
-                Triggering SOS broadcasts your live GPS coordinates directly to Kerala Police (112) and our 24/7 Safety Command Center.
+                Emergency Assistance: Your trip details and live GPS coordinates will be instantly shared with AditiRide Emergency Safety Response Dispatch and your registered emergency contacts.
               </p>
             </div>
 
@@ -793,6 +859,15 @@ export const LiveTrackingView: React.FC<LiveTrackingViewProps> = ({
         currentUser={currentUser}
         preselectedBooking={booking}
       />
+
+      {/* Lost & Found Desk Modal (PRD §14.3) */}
+      {showLostAndFoundModal && (
+        <LostAndFoundModal
+          currentUser={currentUser}
+          recentBookingId={booking?.id}
+          onClose={() => setShowLostAndFoundModal(false)}
+        />
+      )}
 
     </div>
   );

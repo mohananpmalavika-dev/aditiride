@@ -5,6 +5,10 @@ import { t } from '../../i18n/translations.js';
 import { OpenStreetMap } from '../common/OpenStreetMap.js';
 import { VoiceBookingModal } from './VoiceBookingModal.js';
 import { ComplaintCenterModal } from '../common/ComplaintCenterModal.js';
+import { BookForOtherModal } from './BookForOtherModal.js';
+import { RecurringRidesModal } from './RecurringRidesModal.js';
+import { LoyaltyAndPassesModal } from './LoyaltyAndPassesModal.js';
+import { LostAndFoundModal } from '../common/LostAndFoundModal.js';
 import {
   Search,
   Mic,
@@ -27,7 +31,11 @@ import {
   X,
   CheckCircle2,
   MousePointerClick,
-  ShieldAlert
+  ShieldAlert,
+  Repeat,
+  Award,
+  UserPlus,
+  PackageSearch
 } from 'lucide-react';
 
 interface PassengerHomeProps {
@@ -87,6 +95,21 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
   // Modals & Submitting
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [showComplaintModal, setShowComplaintModal] = useState(false);
+  const [showBookForOtherModal, setShowBookForOtherModal] = useState(false);
+  const [bookForOtherDetails, setBookForOtherDetails] = useState<{
+    isBookingForOther: boolean;
+    riderName: string;
+    riderPhone: string;
+    riderPaymentMode: 'BOOKER_PAYS' | 'RIDER_PAYS_CASH';
+  }>({
+    isBookingForOther: false,
+    riderName: '',
+    riderPhone: '',
+    riderPaymentMode: 'BOOKER_PAYS'
+  });
+  const [showRecurringRidesModal, setShowRecurringRidesModal] = useState(false);
+  const [showLoyaltyModal, setShowLoyaltyModal] = useState(false);
+  const [showLostAndFoundModal, setShowLostAndFoundModal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Locate Current GPS Location
@@ -302,8 +325,12 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
         destinationLng: destCoords.lng,
         destinationAddress,
         preferredDriverId,
-        paymentMethod,
-        stops
+        paymentMethod: bookForOtherDetails.isBookingForOther && bookForOtherDetails.riderPaymentMode === 'RIDER_PAYS_CASH' ? 'CASH' : paymentMethod,
+        stops,
+        isBookingForOther: bookForOtherDetails.isBookingForOther,
+        riderName: bookForOtherDetails.riderName,
+        riderPhone: bookForOtherDetails.riderPhone,
+        riderPaymentMode: bookForOtherDetails.riderPaymentMode
       });
 
       onBookingCreated(res.booking.id);
@@ -361,6 +388,53 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
                   <span>{t('voice_booking', language)}</span>
                 </button>
               </div>
+            </div>
+
+            {/* Quick Access Feature Chips (PRD §4.5, §8.2, §13, §14.3) */}
+            <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setShowBookForOtherModal(true)}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                  bookForOtherDetails.isBookingForOther
+                    ? 'bg-indigo-600/30 border-indigo-500 text-white ring-2 ring-indigo-500/40'
+                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                <UserPlus className="w-3.5 h-3.5 text-indigo-400" />
+                <span>
+                  {bookForOtherDetails.isBookingForOther
+                    ? `For: ${bookForOtherDetails.riderName}`
+                    : 'Book for Someone Else'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowRecurringRidesModal(true)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-emerald-300 rounded-xl text-xs font-bold transition-colors"
+              >
+                <Repeat className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Daily Commute</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowLoyaltyModal(true)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-amber-300 rounded-xl text-xs font-bold transition-colors"
+              >
+                <Award className="w-3.5 h-3.5 text-amber-400" />
+                <span>VIP Club & Passes</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowLostAndFoundModal(true)}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-slate-950 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-xs font-bold transition-colors"
+              >
+                <PackageSearch className="w-3.5 h-3.5 text-sky-400" />
+                <span>Lost & Found</span>
+              </button>
             </div>
 
             {/* DUAL LOCATION INPUTS: PICKUP & DESTINATION */}
@@ -912,6 +986,40 @@ export const PassengerHome: React.FC<PassengerHomeProps> = ({
         onClose={() => setShowComplaintModal(false)}
         currentUser={currentUser}
       />
+
+      {/* Book for Someone Else / Family Modal (PRD §4.5) */}
+      <BookForOtherModal
+        currentUser={currentUser}
+        isOpen={showBookForOtherModal}
+        onClose={() => setShowBookForOtherModal(false)}
+        currentDetails={bookForOtherDetails}
+        onSave={details => setBookForOtherDetails(details)}
+      />
+
+      {/* Recurring Rides / Daily Commute Modal (PRD §8.2) */}
+      {showRecurringRidesModal && (
+        <RecurringRidesModal
+          currentUser={currentUser}
+          categories={categories}
+          onClose={() => setShowRecurringRidesModal(false)}
+        />
+      )}
+
+      {/* VIP Loyalty, Passes & Referrals Modal (PRD §13) */}
+      {showLoyaltyModal && (
+        <LoyaltyAndPassesModal
+          currentUser={currentUser}
+          onClose={() => setShowLoyaltyModal(false)}
+        />
+      )}
+
+      {/* Lost & Found Desk Modal (PRD §14.3) */}
+      {showLostAndFoundModal && (
+        <LostAndFoundModal
+          currentUser={currentUser}
+          onClose={() => setShowLostAndFoundModal(false)}
+        />
+      )}
     </div>
   );
 };

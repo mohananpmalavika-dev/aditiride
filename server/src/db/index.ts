@@ -46,7 +46,56 @@ export async function getDb(): Promise<Database> {
   try {
     dbInstance.run("ALTER TABLE driver_pricing ADD COLUMN pickup_charge_per_km REAL DEFAULT 10.0");
   } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN waiting_minutes REAL DEFAULT 0.0");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN waiting_fare REAL DEFAULT 0.0");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN waiting_rate REAL DEFAULT 2.5");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN waiting_status TEXT DEFAULT 'NONE'");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN waiting_started_at TEXT");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN stop_address TEXT");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN is_booking_for_other INTEGER DEFAULT 0");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN rider_name TEXT");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN rider_phone TEXT");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN rider_payment_mode TEXT DEFAULT 'BOOKER_PAYS'");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE bookings ADD COLUMN recurring_series_id TEXT");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE feature_flags ADD COLUMN maturity TEXT DEFAULT 'NOT_IMPLEMENTED'");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE audit_logs ADD COLUMN sequence_number INTEGER");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE audit_logs ADD COLUMN previous_event_hash TEXT");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE audit_logs ADD COLUMN event_hash TEXT");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE audit_logs ADD COLUMN payload_hash TEXT");
+  } catch {}
 
+  seedFeatureFlags(dbInstance);
   seedDatabase(dbInstance);
 
   // Upgrade any non-bcrypt user passwords to secure bcrypt hashes
@@ -922,38 +971,107 @@ function seedDatabase(db: Database) {
     )
   `);
 
-  // 9. Feature Flags (from PRD Appendix B)
-  const flags = [
-    { key: 'driver_pricing', desc: 'Allow drivers to configure bounded custom fares' },
-    { key: 'driver_offer_bidding', desc: 'Enable driver bidding and quotes for outstation' },
-    { key: 'favorite_drivers', desc: 'Enable marking drivers as favorite' },
-    { key: 'favorite_direct_requests', desc: 'Direct booking dispatch to favorite drivers' },
-    { key: 'scheduled_rides', desc: 'Allow booking rides for future dates & times' },
-    { key: 'recurring_rides', desc: 'Weekly/daily repeating commuter rides' },
-    { key: 'voice_booking', desc: 'Multi-lingual voice booking engine' },
-    { key: 'cash_payments', desc: 'Allow cash settlement upon trip completion' },
-    { key: 'wallet', desc: 'In-app AditiRide wallet balance and credits' },
-    { key: 'dynamic_pricing', desc: 'Automatic surge pricing based on demand & zones' },
-    { key: 'multi_stop', desc: 'Multi-stop rides with dynamic re-routing' },
-    { key: 'rentals', desc: 'Hourly rental packages' },
-    { key: 'outstation', desc: 'City-to-city outstation one-way & round-trip' },
-    { key: 'accessible_service', desc: 'Wheelchair & assisted mobility filters' },
-    { key: 'pet_friendly', desc: 'Pet-friendly vehicle filters' },
-    { key: 'women_preference', desc: 'Women-driver preference options' },
-    { key: 'corporate_accounts', desc: 'Enterprise billing & employee cost centers' },
-    { key: 'fleet_portal', desc: 'Fleet operator and multi-vehicle dispatch' },
-    { key: 'route_anomaly_detection', desc: 'Real-time safety route deviation alerts' },
-    { key: 'audio_safety_recording', desc: 'Encrypted in-trip safety audio recording' }
+  // 9. Feature Flags (from PRD Appendix B with maturity lifecycle)
+  seedFeatureFlags(db);
+
+  // 10. Ride Passes & Loyalty Commute Packages (PRD §13)
+  const passes = [
+    {
+      id: 'pass_auto_commute_10',
+      name: '10-Ride Auto Daily Commuter Pass',
+      desc: 'Save flat ₹40 per auto ride across Thrissur & Kochi. Valid for 30 days.',
+      price: 199.0,
+      total_rides: 10,
+      discount: 40.0,
+      cat: 'cat_auto',
+      color: 'amber'
+    },
+    {
+      id: 'pass_sedan_airport_5',
+      name: '5-Ride Airport & Prime Sedan Pass',
+      desc: 'Save flat ₹100 on every airport or intercity Sedan trip. Priority Captain match.',
+      price: 349.0,
+      total_rides: 5,
+      discount: 100.0,
+      cat: 'cat_sedan',
+      color: 'indigo'
+    },
+    {
+      id: 'pass_unlimited_saver',
+      name: 'Kerala City Unlimited Zero-Surge Pass',
+      desc: '100% surge fee waiver on all vehicle classes during rain, festivals & peak hours.',
+      price: 499.0,
+      total_rides: 20,
+      discount: 50.0,
+      cat: null,
+      color: 'emerald'
+    }
   ];
-  for (const f of flags) {
-    db.run(`INSERT INTO feature_flags (key, enabled, description) VALUES (?, 1, ?)`, [f.key, f.desc]);
+  for (const p of passes) {
+    db.run(`
+      INSERT OR IGNORE INTO ride_passes (id, name, description, price, total_rides, discount_per_ride, vehicle_category_id, validity_days, badge_color, is_active)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 30, ?, 1)
+    `, [p.id, p.name, p.desc, p.price, p.total_rides, p.discount, p.cat, p.color]);
   }
 
-  // 10. Audit Log Initial Event
+  // 11. Driver Compliance Documents (PRD §9.5 & §15)
+  const complianceDocs = [
+    { id: 'cdoc_rahul_dl', drv: 'drv_rahul', type: 'DRIVING_LICENSE', num: 'KL-08-2018-009412', status: 'APPROVED' },
+    { id: 'cdoc_rahul_rc', drv: 'drv_rahul', type: 'VEHICLE_RC', num: 'KL-08-BQ-4512', status: 'APPROVED' },
+    { id: 'cdoc_rahul_ins', drv: 'drv_rahul', type: 'INSURANCE', num: 'BAJAJ-ALL-894125', status: 'APPROVED' },
+    { id: 'cdoc_arun_dl', drv: 'drv_arun', type: 'DRIVING_LICENSE', num: 'KL-07-2020-004819', status: 'PENDING' },
+    { id: 'cdoc_arun_rc', drv: 'drv_arun', type: 'VEHICLE_RC', num: 'KL-07-CS-7890', status: 'PENDING' }
+  ];
+  for (const doc of complianceDocs) {
+    db.run(`
+      INSERT OR IGNORE INTO driver_compliance_documents (id, driver_id, document_type, document_number, document_url, expiry_date, verification_status, verified_by, verified_at)
+      VALUES (?, ?, ?, ?, 'https://aditiride.com/docs/compliance_preview.pdf', '2028-12-31', ?, 'usr_admin', datetime('now'))
+    `, [doc.id, doc.drv, doc.type, doc.num, doc.status]);
+  }
+
+  // 12. Sample Lost & Found Item (PRD §14.3)
   db.run(`
-    INSERT INTO audit_logs (id, actor_user_id, actor_role, action, entity_type, entity_id, new_values, ip_address, user_agent)
+    INSERT OR IGNORE INTO lost_and_found_items (id, booking_id, passenger_id, driver_id, item_category, item_description, contact_phone, return_fee, status, driver_notes)
+    VALUES ('lf_sample_1', 'bk_sample_past_1', 'usr_passenger', 'drv_rahul', 'BAG', 'Black leather handbag with college books left in backseat', '+919847000001', 150.0, 'REPORTED', 'Captain Rahul notified to inspect rear seats')
+  `);
+
+  // 13. Audit Log Initial Event
+  db.run(`
+    INSERT OR IGNORE INTO audit_logs (id, actor_user_id, actor_role, action, entity_type, entity_id, new_values, ip_address, user_agent)
     VALUES ('aud_init', 'usr_admin', 'SUPER_ADMIN', 'SYSTEM_INITIALIZED', 'PLATFORM', 'aditiride_v1', '{"version": "1.0", "status": "READY"}', '127.0.0.1', 'Antigravity Kernel')
   `);
 
   console.log('AditiRide platform seed complete.');
+}
+
+export function seedFeatureFlags(db: Database) {
+  const flags = [
+    { key: 'instant_ride', maturity: 'PRODUCTION_CERTIFIED', desc: 'Instant on-demand booking engine' },
+    { key: 'driver_pricing', maturity: 'PRODUCTION_CERTIFIED', desc: 'Allow drivers to configure bounded custom fares' },
+    { key: 'driver_offer_bidding', maturity: 'PRODUCTION_CERTIFIED', desc: 'Enable driver bidding and quotes for outstation' },
+    { key: 'favorite_drivers', maturity: 'PRODUCTION_CERTIFIED', desc: 'Enable marking drivers as favorite & bilateral blocking' },
+    { key: 'favorite_direct_requests', maturity: 'PRODUCTION_CERTIFIED', desc: 'Direct booking dispatch to favorite drivers' },
+    { key: 'scheduled_rides', maturity: 'PRODUCTION_CERTIFIED', desc: 'Allow booking rides for future dates & times' },
+    { key: 'recurring_commute', maturity: 'PRODUCTION_CERTIFIED', desc: 'Weekly/daily repeating commuter rides with date skipping' },
+    { key: 'voice_booking', maturity: 'PRODUCTION_CERTIFIED', desc: 'Multi-lingual voice booking engine' },
+    { key: 'cash_payments', maturity: 'PRODUCTION_CERTIFIED', desc: 'Allow cash settlement upon trip completion' },
+    { key: 'wallet', maturity: 'PRODUCTION_CERTIFIED', desc: 'In-app AditiRide wallet balance and credits' },
+    { key: 'dynamic_pricing', maturity: 'PRODUCTION_CERTIFIED', desc: 'Automatic surge pricing based on demand & zones' },
+    { key: 'multi_stop', maturity: 'PRODUCTION_CERTIFIED', desc: 'Multi-stop rides with dynamic waiting calculation' },
+    { key: 'lost_and_found', maturity: 'PRODUCTION_CERTIFIED', desc: 'Lost & Found Operations Desk with return reward' },
+    { key: 'loyalty_passes', maturity: 'PRODUCTION_CERTIFIED', desc: 'VIP loyalty tiers and commuter ride passes' },
+    { key: 'driver_kyc', maturity: 'PRODUCTION_CERTIFIED', desc: 'Driver compliance document verification' },
+    { key: 'route_anomaly_detection', maturity: 'END_TO_END', desc: 'Real-time safety route deviation alerts' },
+    { key: 'fleet_portal', maturity: 'PRODUCTION_CERTIFIED', desc: 'Fleet operator and multi-vehicle dispatch' },
+    { key: 'rentals', maturity: 'UI_ONLY', desc: 'Hourly rental packages' },
+    { key: 'outstation', maturity: 'UI_ONLY', desc: 'City-to-city outstation one-way & round-trip' },
+    { key: 'accessible_service', maturity: 'BACKEND_PARTIAL', desc: 'Wheelchair & assisted mobility filters' },
+    { key: 'pet_friendly', maturity: 'BACKEND_PARTIAL', desc: 'Pet-friendly vehicle filters' },
+    { key: 'women_preference', maturity: 'BACKEND_PARTIAL', desc: 'Women-driver preference options' },
+    { key: 'corporate_accounts', maturity: 'NOT_IMPLEMENTED', desc: 'Enterprise billing & employee cost centers' },
+    { key: 'audio_safety_recording', maturity: 'NOT_IMPLEMENTED', desc: 'Encrypted in-trip safety audio recording' }
+  ];
+  for (const f of flags) {
+    db.run(`INSERT OR REPLACE INTO feature_flags (key, enabled, maturity, description) VALUES (?, 1, ?, ?)`, [f.key, f.maturity, f.desc]);
+  }
 }

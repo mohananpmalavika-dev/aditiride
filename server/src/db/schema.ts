@@ -184,6 +184,17 @@ CREATE TABLE IF NOT EXISTS bookings (
   scheduled_at TEXT,
   distance_km REAL NOT NULL DEFAULT 0.0,
   duration_min REAL NOT NULL DEFAULT 0.0,
+  waiting_minutes REAL NOT NULL DEFAULT 0.0,
+  waiting_fare REAL NOT NULL DEFAULT 0.0,
+  waiting_rate REAL NOT NULL DEFAULT 2.5,
+  waiting_status TEXT NOT NULL DEFAULT 'NONE',
+  waiting_started_at TEXT,
+  stop_address TEXT,
+  is_booking_for_other INTEGER NOT NULL DEFAULT 0,
+  rider_name TEXT,
+  rider_phone TEXT,
+  rider_payment_mode TEXT DEFAULT 'BOOKER_PAYS',
+  recurring_series_id TEXT,
   otp_code TEXT NOT NULL,
   fare_estimate REAL NOT NULL,
   final_fare REAL,
@@ -396,9 +407,13 @@ CREATE TABLE IF NOT EXISTS complaints (
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Immutable Audit Logs
+-- Cryptographically Hash-Chained Tamper-Evident Audit Logs
 CREATE TABLE IF NOT EXISTS audit_logs (
   id TEXT PRIMARY KEY,
+  sequence_number INTEGER,
+  previous_event_hash TEXT,
+  event_hash TEXT,
+  payload_hash TEXT,
   actor_user_id TEXT NOT NULL,
   actor_role TEXT NOT NULL,
   action TEXT NOT NULL,
@@ -446,10 +461,11 @@ CREATE TABLE IF NOT EXISTS parcel_deliveries (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Feature Flags
+-- Feature Flags (PRD Maturity Lifecycle Gated)
 CREATE TABLE IF NOT EXISTS feature_flags (
   key TEXT PRIMARY KEY,
   enabled INTEGER NOT NULL DEFAULT 1,
+  maturity TEXT NOT NULL DEFAULT 'NOT_IMPLEMENTED',
   description TEXT NOT NULL
 );
 
@@ -571,6 +587,97 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
   last_used_at TEXT,
   revoked_at TEXT,
   rotated_from TEXT
+);
+
+-- Lost & Found Management Desk
+CREATE TABLE IF NOT EXISTS lost_and_found_items (
+  id TEXT PRIMARY KEY,
+  booking_id TEXT NOT NULL REFERENCES bookings(id),
+  passenger_id TEXT NOT NULL REFERENCES users(id),
+  driver_id TEXT REFERENCES driver_profiles(id),
+  item_category TEXT NOT NULL,
+  item_description TEXT NOT NULL,
+  contact_phone TEXT NOT NULL,
+  return_fee REAL NOT NULL DEFAULT 150.0,
+  status TEXT NOT NULL DEFAULT 'REPORTED',
+  driver_notes TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  resolved_at TEXT
+);
+
+-- Recurring Commute Routine Series
+CREATE TABLE IF NOT EXISTS recurring_ride_series (
+  id TEXT PRIMARY KEY,
+  passenger_id TEXT NOT NULL REFERENCES users(id),
+  vehicle_category_id TEXT NOT NULL REFERENCES vehicle_categories(id),
+  pickup_lat REAL NOT NULL,
+  pickup_lng REAL NOT NULL,
+  pickup_address TEXT NOT NULL,
+  destination_lat REAL NOT NULL,
+  destination_lng REAL NOT NULL,
+  destination_address TEXT NOT NULL,
+  pickup_time TEXT NOT NULL,
+  days_of_week TEXT NOT NULL,
+  start_date TEXT NOT NULL,
+  end_date TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  skipped_dates TEXT NOT NULL DEFAULT '[]',
+  preferred_driver_id TEXT REFERENCES driver_profiles(id),
+  contracted_fare REAL,
+  payment_method TEXT NOT NULL DEFAULT 'WALLET',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Ride Passes & Loyalty Commute Packages
+CREATE TABLE IF NOT EXISTS ride_passes (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL,
+  price REAL NOT NULL,
+  total_rides INTEGER NOT NULL,
+  discount_per_ride REAL NOT NULL,
+  vehicle_category_id TEXT REFERENCES vehicle_categories(id),
+  validity_days INTEGER NOT NULL DEFAULT 30,
+  badge_color TEXT DEFAULT 'emerald',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS user_ride_passes (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  pass_id TEXT NOT NULL REFERENCES ride_passes(id),
+  rides_remaining INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Viral Referral Rewards Program
+CREATE TABLE IF NOT EXISTS referral_rewards (
+  id TEXT PRIMARY KEY,
+  referrer_user_id TEXT NOT NULL REFERENCES users(id),
+  referred_user_id TEXT NOT NULL REFERENCES users(id),
+  referral_code TEXT NOT NULL,
+  bonus_amount REAL NOT NULL DEFAULT 100.0,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  credited_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Driver KYC & Compliance Documents Review Hub
+CREATE TABLE IF NOT EXISTS driver_compliance_documents (
+  id TEXT PRIMARY KEY,
+  driver_id TEXT NOT NULL REFERENCES driver_profiles(id),
+  document_type TEXT NOT NULL,
+  document_number TEXT NOT NULL,
+  document_url TEXT,
+  expiry_date TEXT,
+  verification_status TEXT NOT NULL DEFAULT 'PENDING',
+  rejection_reason TEXT,
+  verified_by TEXT,
+  verified_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- Indexes for lightning fast geospatial & lifecycle queries

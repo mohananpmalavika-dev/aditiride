@@ -93,6 +93,17 @@ export interface Booking {
   destination_address: string;
   distance_km: number;
   duration_min: number;
+  waiting_minutes?: number;
+  waiting_fare?: number;
+  waiting_rate?: number;
+  waiting_status?: 'NONE' | 'WAITING' | 'PAUSED' | 'COMPLETED';
+  waiting_started_at?: string;
+  stop_address?: string;
+  is_booking_for_other?: boolean | number;
+  rider_name?: string;
+  rider_phone?: string;
+  rider_payment_mode?: 'BOOKER_PAYS' | 'RIDER_PAYS_CASH';
+  recurring_series_id?: string;
   otp_code: string;
   fare_estimate: number;
   final_fare?: number;
@@ -194,4 +205,126 @@ export interface RatingReview {
   comment?: string;
   is_safety_report: boolean;
   created_at: string;
+}
+
+export type LostItemCategory = 'PHONE' | 'BAG' | 'WALLET' | 'KEYS' | 'DOCUMENTS' | 'CLOTHING' | 'ELECTRONICS' | 'OTHER';
+export type LostItemStatus = 'REPORTED' | 'DRIVER_NOTIFIED' | 'ITEM_FOUND' | 'RETURN_IN_PROGRESS' | 'RESOLVED' | 'CLOSED_NOT_FOUND';
+
+export interface LostAndFoundItem {
+  id: string;
+  booking_id: string;
+  booking_number?: string;
+  passenger_id: string;
+  passenger_name?: string;
+  driver_id?: string;
+  driver_name?: string;
+  driver_phone?: string;
+  item_category: LostItemCategory;
+  item_description: string;
+  contact_phone: string;
+  return_fee: number;
+  status: LostItemStatus;
+  driver_notes?: string;
+  created_at: string;
+  resolved_at?: string;
+}
+
+export type RecurringSeriesStatus = 'ACTIVE' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
+
+export interface RecurringRideSeries {
+  id: string;
+  passenger_id: string;
+  vehicle_category_id: string;
+  vehicle_category_name?: string;
+  pickup_lat: number;
+  pickup_lng: number;
+  pickup_address: string;
+  destination_lat: number;
+  destination_lng: number;
+  destination_address: string;
+  pickup_time: string;
+  days_of_week: string[];
+  start_date: string;
+  end_date: string;
+  status: RecurringSeriesStatus;
+  skipped_dates: string[];
+  preferred_driver_id?: string;
+  preferred_driver_name?: string;
+  contracted_fare?: number;
+  payment_method: string;
+  created_at: string;
+}
+
+export interface RidePass {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  total_rides: number;
+  discount_per_ride: number;
+  vehicle_category_id?: string;
+  vehicle_category_name?: string;
+  validity_days: number;
+  badge_color?: string;
+  is_active: number | boolean;
+  created_at: string;
+}
+
+export interface UserRidePass {
+  id: string;
+  user_id: string;
+  pass_id: string;
+  pass_name?: string;
+  pass_description?: string;
+  discount_per_ride?: number;
+  rides_remaining: number;
+  expires_at: string;
+  status: 'ACTIVE' | 'EXPIRED' | 'EXHAUSTED';
+  created_at: string;
+}
+
+export interface ReferralReward {
+  id: string;
+  referrer_user_id: string;
+  referred_user_id: string;
+  referral_code: string;
+  bonus_amount: number;
+  status: 'PENDING' | 'CREDITED' | 'EXPIRED';
+  credited_at?: string;
+  created_at: string;
+}
+
+export type ComplianceDocType = 'DRIVING_LICENSE' | 'VEHICLE_RC' | 'INSURANCE' | 'POLICE_VERIFICATION' | 'PERMIT' | 'FITNESS';
+export type ComplianceDocStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export interface DriverComplianceDocument {
+  id: string;
+  driver_id: string;
+  driver_name?: string;
+  driver_phone?: string;
+  document_type: ComplianceDocType;
+  document_number: string;
+  document_url?: string;
+  expiry_date?: string;
+  verification_status: ComplianceDocStatus;
+  rejection_reason?: string;
+  verified_by?: string;
+  verified_at?: string;
+  created_at: string;
+}
+
+export interface DriverProfile {
+  id: string;
+  user_id: string;
+  license_number?: string;
+  vehicle_category_id?: string;
+  vehicle_brand?: string;
+  vehicle_model?: string;
+  vehicle_plate?: string;
+  rating_avg?: number;
+  total_trips?: number;
+  current_lat?: number;
+  current_lng?: number;
+  is_online?: number | boolean;
+  status?: string;
 }

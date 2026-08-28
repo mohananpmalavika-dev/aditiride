@@ -26,6 +26,9 @@ export const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
   const [customGoogleEmail, setCustomGoogleEmail] = useState('');
   const [customGoogleName, setCustomGoogleName] = useState('');
 
+  const isDevMode = typeof import.meta !== 'undefined' && (import.meta as any).env?.DEV;
+  const isSandboxAllowed = isDevMode && (import.meta as any).env?.VITE_ENABLE_SANDBOX_AUTH === 'true';
+
   const label =
     text === 'signup'
       ? 'Sign up with Google'
@@ -33,7 +36,7 @@ export const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
       ? 'Sign in with Google'
       : 'Continue with Google';
 
-  // Preset quick Google sandbox accounts for frictionless testing
+  // Preset quick Google sandbox accounts (Strictly active only in local non-production sandbox mode)
   const sandboxProfiles = [
     {
       name: 'Aditi Passenger',
@@ -75,16 +78,30 @@ export const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
         });
         (window as any).google.accounts.id.prompt((notification: any) => {
           if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-            setShowSandboxModal(true);
+            if (isSandboxAllowed) {
+              setShowSandboxModal(true);
+            } else {
+              onError('Google Sign-In prompt was dismissed or blocked by popup blocker. Please try again or use Email login.');
+            }
           }
         });
         return;
       } catch (err) {
-        console.warn('Google Identity Services init failed, falling back to instant sandbox flow:', err);
+        console.warn('Google Identity Services init failed:', err);
+        if (!isSandboxAllowed) {
+          onError('Google Sign-In initialization failed. Please use Email and Password.');
+          return;
+        }
       }
     }
 
-    // Default to Google authentication selector modal
+    // In Production / Default: Never fall back to sandbox
+    if (!isSandboxAllowed) {
+      onError('Google Sign-In requires active Google OAuth configuration. Please log in with your email and password.');
+      return;
+    }
+
+    // Only reachable in local dev with explicit VITE_ENABLE_SANDBOX_AUTH=true
     setShowSandboxModal(true);
   };
 
@@ -150,8 +167,8 @@ export const GoogleAuthButton: React.FC<GoogleAuthButtonProps> = ({
         </span>
       </button>
 
-      {/* Interactive Google Sign-In Sandbox & Profile Modal */}
-      {showSandboxModal && (
+      {/* Interactive Google Sign-In Sandbox & Profile Modal (Local Dev Only) */}
+      {showSandboxModal && isSandboxAllowed && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
           <div className="bg-slate-900 border border-slate-700/80 rounded-3xl p-6 w-full max-w-md shadow-2xl shadow-black/80 space-y-5 text-slate-100 relative">
             

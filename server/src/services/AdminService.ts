@@ -155,16 +155,52 @@ export class AdminService {
        FROM bookings 
        WHERE status = 'COMPLETED' AND driver_id IS NOT NULL 
        GROUP BY passenger_id, driver_id 
-       HAVING trip_count >= 10`
+       HAVING trip_count >= 5`
     );
     for (const p of repeatedPairs) {
       anomalies.push({
         id: `anom_collude_${p.passenger_id}_${p.driver_id}`,
-        severity: 'MEDIUM',
+        severity: 'HIGH',
         type: 'COLLUSION_OR_FREQUENT_PAIR',
         userId: p.passenger_id,
-        details: `Passenger has completed ${p.trip_count} rides with the same driver (${p.driver_id})`,
-        recommendedAction: 'Verify if verified favorite relationship or artificial incentive harvesting'
+        details: `Passenger completed ${p.trip_count} rides with the exact same captain (${p.driver_id}) within monitored window`,
+        recommendedAction: 'Inspect rides for zero-distance completions or promo/referral incentive laundering'
+      });
+    }
+
+    // 3. Rapid Cancellation Abuse & Dispatch Manipulation
+    const rapidCancels = query<{ passenger_id: string; cancel_count: number }>(
+      `SELECT passenger_id, COUNT(*) as cancel_count
+       FROM bookings
+       WHERE status IN ('CANCELLED_BY_PASSENGER', 'EXPIRED')
+       GROUP BY passenger_id
+       HAVING cancel_count >= 3`
+    );
+    for (const rc of rapidCancels) {
+      anomalies.push({
+        id: `anom_rapid_cancel_${rc.passenger_id}`,
+        severity: 'MEDIUM',
+        type: 'RAPID_CANCELLATION_MANIPULATION',
+        userId: rc.passenger_id,
+        details: `Passenger generated ${rc.cancel_count} cancellations/expired searches in short interval`,
+        recommendedAction: 'Apply temporary 15-minute dispatch cool-off lock'
+      });
+    }
+
+    // 4. GPS Teleportation & Impossible Speed Sentinel (>160 km/h)
+    const speedAnomalies = query<{ id: string; driver_id: string; distance_km: number; duration_min: number }>(
+      `SELECT id, driver_id, distance_km, duration_min
+       FROM bookings
+       WHERE status = 'COMPLETED' AND duration_min > 0 AND (distance_km / (duration_min / 60.0)) > 160.0`
+    );
+    for (const sa of speedAnomalies) {
+      anomalies.push({
+        id: `anom_teleport_${sa.id}`,
+        severity: 'CRITICAL',
+        type: 'GPS_SPOOF_OR_TELEPORTATION',
+        userId: sa.driver_id,
+        details: `Trip #${sa.id} completed at calculated speed of ${Math.round(sa.distance_km / (sa.duration_min / 60.0))} km/h (exceeds physics threshold of 160 km/h)`,
+        recommendedAction: 'Flag driver profile for immediate mock-location / fake GPS inspection'
       });
     }
 
