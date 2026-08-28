@@ -29,6 +29,12 @@ export async function getDb(): Promise<Database> {
 
   // SQLite Alter Table column migrations
   try {
+    dbInstance.run("ALTER TABLE users ADD COLUMN auth_provider TEXT DEFAULT 'LOCAL'");
+  } catch {}
+  try {
+    dbInstance.run("ALTER TABLE users ADD COLUMN google_id TEXT");
+  } catch {}
+  try {
     dbInstance.run("ALTER TABLE driver_profiles ADD COLUMN free_pickup_km REAL DEFAULT 2.0");
   } catch {}
   try {

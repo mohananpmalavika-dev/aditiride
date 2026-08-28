@@ -98,6 +98,88 @@ export const api = {
     }
     return res;
   },
+  loginWithEmail: async (email: string, password?: string) => {
+    const res = await fetchApi('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password })
+    });
+    if (res.token) {
+      setAuthTokens(res.token, res.refreshToken);
+    }
+    return res;
+  },
+  loginWithGoogle: async (payload: {
+    credential?: string;
+    email?: string;
+    name?: string;
+    googleId?: string;
+    avatarUrl?: string;
+    role?: string;
+    preferredLanguage?: string;
+  }) => {
+    const res = await fetchApi('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.token) {
+      setAuthTokens(res.token, res.refreshToken);
+    }
+    return res;
+  },
+  registerUser: async (payload: any) => {
+    const res = await fetchApi('/auth/register', { method: 'POST', body: JSON.stringify(payload) });
+    if (res.token) {
+      setAuthTokens(res.token, res.refreshToken);
+    }
+    return res;
+  },
+  registerWithEmail: async (payload: {
+    name: string;
+    email: string;
+    password: string;
+    role?: string;
+    phone?: string;
+    preferredLanguage?: string;
+    vehicleCategoryId?: string;
+    vehicleBrand?: string;
+    vehicleModel?: string;
+    vehiclePlate?: string;
+    licenseNumber?: string;
+    companyName?: string;
+  }) => {
+    const res = await fetchApi('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.token) {
+      setAuthTokens(res.token, res.refreshToken);
+    }
+    return res;
+  },
+  registerWithGoogle: async (payload: {
+    credential?: string;
+    email?: string;
+    name?: string;
+    googleId?: string;
+    avatarUrl?: string;
+    role: string;
+    phone?: string;
+    preferredLanguage?: string;
+    vehicleCategoryId?: string;
+    vehicleBrand?: string;
+    vehicleModel?: string;
+    vehiclePlate?: string;
+    companyName?: string;
+  }) => {
+    const res = await fetchApi('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+    if (res.token) {
+      setAuthTokens(res.token, res.refreshToken);
+    }
+    return res;
+  },
   refreshToken: (refreshToken: string) => fetchApi('/auth/refresh', { method: 'POST', body: JSON.stringify({ refreshToken }) }),
   logout: async () => {
     const refreshToken = getRefreshToken();
@@ -116,7 +198,6 @@ export const api = {
       clearAuthTokens();
     }
   },
-  registerUser: (payload: any) => fetchApi('/auth/register', { method: 'POST', body: JSON.stringify(payload) }),
   getUsers: () => fetchApi('/auth/users'),
   
   // Catalogue & Categories

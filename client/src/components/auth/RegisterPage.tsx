@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../../services/api.js';
 import { User, LanguageCode } from '../../types/index.js';
+import { GoogleAuthButton } from './GoogleAuthButton.js';
 import {
   Compass,
   Car,
@@ -17,6 +18,8 @@ import {
   CheckCircle2,
   Mic,
   Shield,
+  Eye,
+  EyeOff,
   HeartHandshake
 } from 'lucide-react';
 
@@ -35,10 +38,10 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
 
   // Common Fields
   const [name, setName] = useState('');
-  const [username, setUsername] = useState('');
-  const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [phone, setPhone] = useState('');
   const [emergencyContact, setEmergencyContact] = useState('');
 
   // Driver Fields
@@ -52,12 +55,24 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
   const [companyName, setCompanyName] = useState('');
 
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
-  const handleRegister = async (e: React.FormEvent) => {
+  const handleEmailPasswordRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !phone.trim()) {
-      setErrorMsg('Full name and mobile phone number are required.');
+    if (!name.trim()) {
+      setErrorMsg('Full name is required.');
+      return;
+    }
+
+    if (!email.trim()) {
+      setErrorMsg('Email address is required.');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      setErrorMsg('Please enter a valid email address.');
       return;
     }
 
@@ -79,13 +94,12 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
     try {
       const payload: any = {
         name: name.trim(),
-        username: username.trim() || undefined,
-        phone: phone.trim(),
-        email: email.trim() || undefined,
+        email: email.trim().toLowerCase(),
         password: password,
+        phone: phone.trim() || undefined,
         role,
-        preferredLanguage: 'en',
-        emergencyContact
+        preferredLanguage: language || 'en',
+        emergencyContact: emergencyContact.trim() || undefined
       };
 
       if (role === 'DRIVER') {
@@ -98,12 +112,48 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
         payload.companyName = companyName.trim();
       }
 
-      const res = await api.registerUser(payload);
+      const res = await api.registerWithEmail(payload);
       onRegisterSuccess(res.user, res.token);
     } catch (err: any) {
       setErrorMsg(err.message || 'Registration failed. Please try again.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleGoogleSuccess = async (googleData: {
+    credential?: string;
+    email?: string;
+    name?: string;
+    googleId?: string;
+    avatarUrl?: string;
+  }) => {
+    setIsGoogleLoading(true);
+    setErrorMsg('');
+
+    try {
+      const payload: any = {
+        ...googleData,
+        role,
+        phone: phone.trim() || undefined,
+        preferredLanguage: language || 'en'
+      };
+
+      if (role === 'DRIVER') {
+        payload.vehicleCategoryId = vehicleCategoryId;
+        payload.vehicleBrand = vehicleBrand.trim() || 'Bajaj';
+        payload.vehicleModel = vehicleModel.trim() || 'Compact';
+        payload.vehiclePlate = vehiclePlate.trim() || `KL-08-${Math.floor(1000 + Math.random() * 9000)}`;
+      } else if (role === 'FLEET_MANAGER') {
+        payload.companyName = companyName.trim() || 'Kerala Mobility Partner';
+      }
+
+      const res = await api.registerWithGoogle(payload);
+      onRegisterSuccess(res.user, res.token);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Google registration failed. Please try again.');
+    } finally {
+      setIsGoogleLoading(false);
     }
   };
 
@@ -223,7 +273,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
             
             <div>
               <h2 className="text-2xl font-black text-white">Create Account</h2>
-              <p className="text-xs text-slate-400 mt-0.5">Select role and fill in your profile details.</p>
+              <p className="text-xs text-slate-400 mt-0.5">Choose your role and authenticate with Google or Email.</p>
             </div>
 
             {/* Role Switcher */}
@@ -236,7 +286,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                   type="button"
                   onClick={() => setRole('PASSENGER')}
                   className={`py-2 rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-1 transition-all ${
-                    role === 'PASSENGER' ? 'bg-brand-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                    role === 'PASSENGER' ? 'bg-brand-600 text-white shadow-md ring-1 ring-brand-400/40' : 'text-slate-400 hover:text-white'
                   }`}
                 >
                   <Car className="w-4 h-4" />
@@ -247,7 +297,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                   type="button"
                   onClick={() => setRole('DRIVER')}
                   className={`py-2 rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-1 transition-all ${
-                    role === 'DRIVER' ? 'bg-brand-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                    role === 'DRIVER' ? 'bg-brand-600 text-white shadow-md ring-1 ring-brand-400/40' : 'text-slate-400 hover:text-white'
                   }`}
                 >
                   <UserCheck className="w-4 h-4" />
@@ -258,7 +308,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                   type="button"
                   onClick={() => setRole('FLEET_MANAGER')}
                   className={`py-2 rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-1 transition-all ${
-                    role === 'FLEET_MANAGER' ? 'bg-brand-600 text-white shadow-md' : 'text-slate-400 hover:text-white'
+                    role === 'FLEET_MANAGER' ? 'bg-brand-600 text-white shadow-md ring-1 ring-brand-400/40' : 'text-slate-400 hover:text-white'
                   }`}
                 >
                   <Truck className="w-4 h-4" />
@@ -273,64 +323,98 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
               </div>
             )}
 
-            <form onSubmit={handleRegister} className="space-y-3.5">
+            {/* PRIMARY REGISTRATION OPTION 1: GOOGLE ONE-CLICK SIGNUP */}
+            <div className="space-y-2">
+              <GoogleAuthButton
+                text="signup"
+                isLoading={isGoogleLoading}
+                disabled={isLoading}
+                onSuccess={handleGoogleSuccess}
+                onError={setErrorMsg}
+              />
+            </div>
+
+            {/* STYLISH DIVIDER */}
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-slate-800"></div>
+              <span className="flex-shrink mx-3 text-[10px] uppercase font-bold tracking-widest text-slate-500 bg-slate-900 px-2 py-0.5 rounded-full border border-slate-800">
+                Or register with email & password
+              </span>
+              <div className="flex-grow border-t border-slate-800"></div>
+            </div>
+
+            {/* PRIMARY REGISTRATION OPTION 2: EMAIL & PASSWORD FORM */}
+            <form onSubmit={handleEmailPasswordRegister} className="space-y-3.5">
               
-              {/* Name & Phone */}
+              {/* Name & Email */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">Full Name *</label>
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={e => setName(e.target.value)}
-                    placeholder="e.g. Anand Varma"
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                    required
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={e => setName(e.target.value)}
+                      placeholder="e.g. Anand Varma"
+                      className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      required
+                    />
+                  </div>
                 </div>
 
                 <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">Mobile Number *</label>
+                  <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">Email Address *</label>
+                  <div className="relative">
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                      placeholder="anand@example.com"
+                      className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Password & Phone */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">Password (6+ chars) *</label>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      placeholder="Choose password"
+                      className="w-full px-3 pr-9 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
+                      required
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-2.5 flex items-center text-slate-500 hover:text-slate-300"
+                    >
+                      {showPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">Mobile Number (Optional)</label>
                   <input
                     type="tel"
                     value={phone}
                     onChange={e => setPhone(e.target.value)}
                     placeholder="+91 9447123456"
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Username & Password */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">Username</label>
-                  <input
-                    type="text"
-                    value={username}
-                    onChange={e => setUsername(e.target.value)}
-                    placeholder="e.g. anand_v"
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">Password *</label>
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    placeholder="Choose password"
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500 font-mono"
-                    required
+                    className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500"
                   />
                 </div>
               </div>
 
               {/* Driver Fields */}
               {role === 'DRIVER' && (
-                <div className="p-3.5 bg-slate-950 rounded-2xl border border-brand-800/40 space-y-2.5">
+                <div className="p-3.5 bg-slate-950 rounded-2xl border border-brand-800/40 space-y-2.5 animate-in fade-in">
                   <span className="text-[11px] font-extrabold text-brand-400 flex items-center space-x-1.5">
                     <ShieldCheck className="w-3.5 h-3.5" />
                     <span>Captain & Vehicle Parameters</span>
@@ -353,24 +437,52 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Plate #</label>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Vehicle Model *</label>
+                      <input
+                        type="text"
+                        value={vehicleModel}
+                        onChange={e => setVehicleModel(e.target.value)}
+                        placeholder="e.g. Bajaj RE / Swift"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
+                        required={role === 'DRIVER'}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Plate # *</label>
                       <input
                         type="text"
                         value={vehiclePlate}
                         onChange={e => setVehiclePlate(e.target.value)}
                         placeholder="KL-08-BW-7777"
                         className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white uppercase font-mono"
+                        required={role === 'DRIVER'}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Vehicle Brand *</label>
+                      <input
+                        type="text"
+                        value={vehicleBrand}
+                        onChange={e => setVehicleBrand(e.target.value)}
+                        placeholder="e.g. Bajaj / Maruti"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
+                        required={role === 'DRIVER'}
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">License #</label>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">License # *</label>
                       <input
                         type="text"
                         value={licenseNumber}
                         onChange={e => setLicenseNumber(e.target.value)}
                         placeholder="DL-08-2024"
                         className="w-full px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white uppercase font-mono"
+                        required={role === 'DRIVER'}
                       />
                     </div>
                   </div>
@@ -379,7 +491,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
 
               {/* Fleet Field */}
               {role === 'FLEET_MANAGER' && (
-                <div className="space-y-1 p-3 bg-slate-950 rounded-2xl border border-brand-800/40">
+                <div className="space-y-1 p-3 bg-slate-950 rounded-2xl border border-brand-800/40 animate-in fade-in">
                   <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">Fleet / Organization Name *</label>
                   <input
                     type="text"
@@ -387,6 +499,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                     onChange={e => setCompanyName(e.target.value)}
                     placeholder="e.g. Kerala Star Mobility"
                     className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white"
+                    required={role === 'FLEET_MANAGER'}
                   />
                 </div>
               )}
@@ -394,7 +507,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
               {/* Submit */}
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isLoading || isGoogleLoading}
                 className="w-full mt-2 py-3.5 bg-gradient-to-r from-brand-600 to-emerald-500 hover:from-brand-500 hover:to-emerald-400 text-white font-extrabold text-sm rounded-2xl shadow-xl shadow-brand-500/25 transition-all flex items-center justify-center space-x-2 active:scale-98 disabled:opacity-50"
               >
                 {isLoading ? (
@@ -404,7 +517,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({
                   </>
                 ) : (
                   <>
-                    <span>Register as {role === 'PASSENGER' ? 'Passenger' : role === 'DRIVER' ? 'Captain' : 'Fleet Partner'}</span>
+                    <span>Create {role === 'PASSENGER' ? 'Passenger' : role === 'DRIVER' ? 'Captain' : 'Fleet'} Account</span>
                     <ArrowRight className="w-4 h-4" />
                   </>
                 )}

@@ -11,10 +11,12 @@ export type LanguageCode = 'en' | 'ml' | 'hi' | 'ta' | 'kn' | 'te';
 
 export interface User {
   id: string;
-  phone: string;
+  phone?: string;
   email: string;
   name: string;
   role: UserRole;
+  auth_provider?: 'LOCAL' | 'GOOGLE';
+  google_id?: string;
   avatar_url?: string;
   emergency_contact?: string;
   preferred_language: LanguageCode;

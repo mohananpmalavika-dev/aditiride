@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { api } from '../../services/api.js';
 import { User, LanguageCode } from '../../types/index.js';
+import { GoogleAuthButton } from './GoogleAuthButton.js';
 import {
   Compass,
   Lock,
-  User as UserIcon,
+  Mail,
   Eye,
   EyeOff,
   Shield,
@@ -30,17 +31,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   onNavigateRegister,
   language
 }) => {
-  const [identifier, setIdentifier] = useState('');
+  const [emailOrIdentifier, setEmailOrIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [activeRoleFilter, setActiveRoleFilter] = useState<'ADMIN' | 'PASSENGER' | 'DRIVER' | 'FLEET'>('PASSENGER');
 
-  const handleLogin = async (e?: React.FormEvent) => {
+  const handleEmailPasswordLogin = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!identifier.trim()) {
-      setErrorMsg('Please enter your username, email, or mobile number');
+    if (!emailOrIdentifier.trim()) {
+      setErrorMsg('Please enter your email address');
       return;
     }
     if (!password) {
@@ -52,12 +54,36 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     setErrorMsg('');
 
     try {
-      const res = await api.loginWithCredentials(identifier.trim(), password);
+      const res = await api.loginWithCredentials(emailOrIdentifier.trim(), password);
       onLoginSuccess(res.user, res.token);
     } catch (err: any) {
       setErrorMsg(err.message || 'Login failed. Please check your credentials.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleGoogleSuccess = async (googleData: {
+    credential?: string;
+    email?: string;
+    name?: string;
+    googleId?: string;
+    avatarUrl?: string;
+  }) => {
+    setIsGoogleLoading(true);
+    setErrorMsg('');
+
+    try {
+      const res = await api.loginWithGoogle({
+        ...googleData,
+        role: activeRoleFilter === 'FLEET' ? 'FLEET_MANAGER' : activeRoleFilter,
+        preferredLanguage: language
+      });
+      onLoginSuccess(res.user, res.token);
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Google sign-in failed. Please try again.');
+    } finally {
+      setIsGoogleLoading(false);
     }
   };
 
@@ -151,7 +177,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       {/* ========================================================= */}
       {/* RIGHT COLUMN: PROFESSIONAL LOGIN INTERFACE */}
       {/* ========================================================= */}
-      <div className="lg:w-1/2 p-6 lg:p-16 flex items-center justify-center relative">
+      <div className="lg:w-1/2 p-6 lg:p-16 flex items-center justify-center relative overflow-y-auto">
         <div className="w-full max-w-md space-y-6">
           
           {/* Card Container */}
@@ -161,7 +187,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             <div>
               <h2 className="text-2xl font-black text-white tracking-tight">Sign In</h2>
               <p className="text-xs text-slate-400 mt-1">
-                Enter your credentials to access your portal.
+                Authenticate with Google or enter your email and password.
               </p>
             </div>
 
@@ -176,7 +202,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   onClick={() => setActiveRoleFilter('PASSENGER')}
                   className={`py-2 rounded-xl text-[11px] font-bold flex flex-col items-center justify-center space-y-1 transition-all ${
                     activeRoleFilter === 'PASSENGER'
-                      ? 'bg-brand-600 text-white shadow-md'
+                      ? 'bg-brand-600 text-white shadow-md ring-1 ring-brand-400/40'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -189,7 +215,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   onClick={() => setActiveRoleFilter('DRIVER')}
                   className={`py-2 rounded-xl text-[11px] font-bold flex flex-col items-center justify-center space-y-1 transition-all ${
                     activeRoleFilter === 'DRIVER'
-                      ? 'bg-brand-600 text-white shadow-md'
+                      ? 'bg-brand-600 text-white shadow-md ring-1 ring-brand-400/40'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -202,7 +228,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   onClick={() => setActiveRoleFilter('FLEET')}
                   className={`py-2 rounded-xl text-[11px] font-bold flex flex-col items-center justify-center space-y-1 transition-all ${
                     activeRoleFilter === 'FLEET'
-                      ? 'bg-brand-600 text-white shadow-md'
+                      ? 'bg-brand-600 text-white shadow-md ring-1 ring-brand-400/40'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -215,7 +241,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   onClick={() => setActiveRoleFilter('ADMIN')}
                   className={`py-2 rounded-xl text-[11px] font-bold flex flex-col items-center justify-center space-y-1 transition-all ${
                     activeRoleFilter === 'ADMIN'
-                      ? 'bg-brand-600 text-white shadow-md'
+                      ? 'bg-brand-600 text-white shadow-md ring-1 ring-brand-400/40'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
@@ -233,23 +259,43 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               </div>
             )}
 
-            {/* Login Form */}
-            <form onSubmit={handleLogin} className="space-y-4">
+            {/* PRIMARY AUTH OPTION 1: GOOGLE AUTHENTICATION */}
+            <div className="space-y-2">
+              <GoogleAuthButton
+                text="continue"
+                isLoading={isGoogleLoading}
+                disabled={isLoading}
+                onSuccess={handleGoogleSuccess}
+                onError={setErrorMsg}
+              />
+            </div>
+
+            {/* STYLISH DIVIDER */}
+            <div className="relative flex py-1 items-center">
+              <div className="flex-grow border-t border-slate-800"></div>
+              <span className="flex-shrink mx-3 text-[10px] uppercase font-bold tracking-widest text-slate-500 bg-slate-900 px-2 py-0.5 rounded-full border border-slate-800">
+                Or continue with email
+              </span>
+              <div className="flex-grow border-t border-slate-800"></div>
+            </div>
+
+            {/* PRIMARY AUTH OPTION 2: EMAIL & PASSWORD FORM */}
+            <form onSubmit={handleEmailPasswordLogin} className="space-y-4">
               
-              {/* Identifier Input */}
+              {/* Email Input */}
               <div className="space-y-1">
                 <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                  Username / Email / Mobile Number
+                  Email Address / Username
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-500">
-                    <UserIcon className="w-4 h-4" />
+                    <Mail className="w-4 h-4" />
                   </div>
                   <input
                     type="text"
-                    value={identifier}
-                    onChange={e => setIdentifier(e.target.value)}
-                    placeholder="Enter your username, email, or mobile"
+                    value={emailOrIdentifier}
+                    onChange={e => setEmailOrIdentifier(e.target.value)}
+                    placeholder="name@example.com"
                     className="block w-full pl-10 pr-4 py-3 bg-slate-950 border border-slate-800 rounded-2xl text-xs font-semibold text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition-all"
                     required
                   />
@@ -286,7 +332,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               {/* Submit Action */}
               <button
                 type="submit"
-                disabled={isLoading}
+                disabled={isLoading || isGoogleLoading}
                 className="w-full py-3.5 bg-gradient-to-r from-brand-600 to-emerald-500 hover:from-brand-500 hover:to-emerald-400 text-white font-extrabold text-sm rounded-2xl shadow-xl shadow-brand-500/25 transition-all flex items-center justify-center space-x-2 active:scale-98 disabled:opacity-50"
               >
                 {isLoading ? (

@@ -37,30 +37,211 @@ import {
 export const apiRouter = Router();
 
 // ==========================================
-// 1. AUTHENTICATION & USERS (Session-Based with Refresh Token Rotation)
-// ==========================================
-apiRouter.post('/auth/login', (req: Request, res: Response) => {
-  const { identifier, password, deviceId, deviceName } = req.body;
+function decodeGoogleIdToken(token: string): { email?: string; name?: string; sub?: string; picture?: string; email_verified?: boolean } | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length < 2) return null;
+    const payloadBase64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const payloadJson = Buffer.from(payloadBase64, 'base64').toString('utf-8');
+    return JSON.parse(payloadJson);
+  } catch {
+    return null;
+  }
+}
 
-  if (!identifier) {
-    return res.status(400).json({ error: 'Please enter your username, email, or phone number' });
+// ==========================================
+// 1. AUTHENTICATION & USERS (Google & Email/Password with Refresh Token Rotation)
+// ==========================================
+
+apiRouter.post('/auth/google', (req: Request, res: Response) => {
+  const {
+    credential,
+    email: directEmail,
+    name: directName,
+    googleId: directGoogleId,
+    avatarUrl: directAvatarUrl,
+    role,
+    preferredLanguage,
+    phone,
+    vehicleCategoryId,
+    vehicleBrand,
+    vehicleModel,
+    vehiclePlate,
+    deviceId,
+    deviceName
+  } = req.body;
+
+  let email = directEmail;
+  let name = directName;
+  let googleId = directGoogleId;
+  let avatarUrl = directAvatarUrl;
+
+  if (credential) {
+    const decoded = decodeGoogleIdToken(credential);
+    if (decoded) {
+      email = email || decoded.email;
+      name = name || decoded.name;
+      googleId = googleId || decoded.sub;
+      avatarUrl = avatarUrl || decoded.picture;
+    }
+  }
+
+  if (!email && !googleId) {
+    return res.status(400).json({ error: 'Google authentication failed: Email or Google ID is required.' });
+  }
+
+  // Look for existing user by google_id or email
+  let user: User | undefined;
+  if (googleId) {
+    user = get<User>('SELECT * FROM users WHERE google_id = ?', [googleId]);
+  }
+  if (!user && email) {
+    user = get<User>('SELECT * FROM users WHERE LOWER(email) = LOWER(?)', [email]);
+  }
+
+  if (user) {
+    // If user exists, link google_id and update provider/avatar if not present
+    if (!user.google_id && googleId) {
+      run('UPDATE users SET google_id = ?, auth_provider = ?, avatar_url = COALESCE(avatar_url, ?) WHERE id = ?', [
+        googleId,
+        user.auth_provider === 'LOCAL' ? 'LOCAL' : 'GOOGLE',
+        avatarUrl || null,
+        user.id
+      ]);
+      user = get<User>('SELECT * FROM users WHERE id = ?', [user.id]);
+    }
+  } else {
+    // New user registration via Google OAuth
+    const userId = `usr_${uuidv4().substring(0, 8)}`;
+    const userRole = role || 'PASSENGER';
+    const userName = name || email?.split('@')[0] || 'Google User';
+    const userEmail = email ? email.toLowerCase() : `${googleId}@google.aditiride.com`;
+    const userPhone = phone || `+91${Math.floor(6000000000 + Math.random() * 3999999999)}`;
+    const baseUsername = email ? email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '') : `user_${googleId?.substring(0, 6)}`;
+    const username = `${baseUsername}_${Math.floor(100 + Math.random() * 900)}`;
+    const oauthPasswordHash = hashPassword(`oauth_google_${uuidv4()}`);
+
+    run(`
+      INSERT INTO users (id, username, phone, email, name, role, password_hash, auth_provider, google_id, avatar_url, preferred_language, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'GOOGLE', ?, ?, ?, 'ACTIVE')
+    `, [
+      userId,
+      username,
+      userPhone,
+      userEmail,
+      userName,
+      userRole,
+      oauthPasswordHash,
+      googleId || null,
+      avatarUrl || null,
+      preferredLanguage || 'en'
+    ]);
+
+    if (userRole === 'PASSENGER') {
+      run(`
+        INSERT INTO passenger_profiles (id, user_id, default_vehicle_category_id, default_payment_method, wallet_balance)
+        VALUES (?, ?, 'cat_auto', 'UPI', 500.0)
+      `, [`prof_${uuidv4().substring(0, 8)}`, userId]);
+
+      run(`INSERT INTO wallets (id, user_id, balance, currency) VALUES (?, ?, 500.0, 'INR')`, [
+        `wal_${uuidv4().substring(0, 8)}`,
+        userId
+      ]);
+    } else if (userRole === 'DRIVER') {
+      const driverProfileId = `drv_${uuidv4().substring(0, 8)}`;
+      const categoryId = vehicleCategoryId || 'cat_auto';
+
+      run(`
+        INSERT INTO driver_profiles (
+          id, user_id, verification_status, availability_status, current_lat, current_lng, heading,
+          rating_avg, acceptance_rate, cancellation_rate, total_trips, custom_fare_enabled, accepts_favorite_requests
+        ) VALUES (?, ?, 'VERIFIED', 'ONLINE', 10.5276, 76.2144, 0, 5.0, 1.0, 0.0, 0, 1, 1)
+      `, [driverProfileId, userId]);
+
+      const vehicleId = `veh_${uuidv4().substring(0, 8)}`;
+      run(`
+        INSERT INTO vehicles (
+          id, driver_id, vehicle_category_id, vehicle_type, brand, model, year, color, plate_number, status
+        ) VALUES (?, ?, ?, 'Standard', ?, ?, 2024, 'White', ?, 'ACTIVE')
+      `, [
+        vehicleId,
+        driverProfileId,
+        categoryId,
+        vehicleBrand || 'Bajaj',
+        vehicleModel || 'Compact',
+        vehiclePlate || `KL-08-${Math.floor(1000 + Math.random() * 9000)}`
+      ]);
+
+      run(`
+        INSERT INTO driver_pricing (
+          id, driver_id, vehicle_category_id, custom_base_fare, custom_per_km, custom_per_minute, custom_waiting_rate, custom_minimum_fare
+        ) VALUES (?, ?, ?, 40.0, 14.0, 2.0, 2.0, 50.0)
+      `, [uuidv4(), driverProfileId, categoryId]);
+    }
+
+    user = get<User>('SELECT * FROM users WHERE id = ?', [userId]);
+  }
+
+  if (!user) {
+    return res.status(500).json({ error: 'Failed to authenticate user via Google' });
+  }
+
+  // Fetch role-specific profile details
+  let roleData: any = {};
+  if (user.role === 'PASSENGER') {
+    roleData = get('SELECT * FROM passenger_profiles WHERE user_id = ?', [user.id]);
+  } else if (user.role === 'DRIVER') {
+    roleData = get(`
+      SELECT d.*, v.id as vehicle_id, v.brand as vehicle_brand, v.model as vehicle_model, v.plate_number as vehicle_plate, v.vehicle_category_id
+      FROM driver_profiles d
+      LEFT JOIN vehicles v ON v.driver_id = d.id
+      WHERE d.user_id = ?
+    `, [user.id]);
+  }
+
+  // Create persistent session with refresh token
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const ua = req.headers['user-agent'] || 'AditiRide App';
+  const session = AuthSessionService.createSession(user, ip, ua, deviceId, deviceName);
+
+  res.json({
+    user,
+    roleData,
+    token: session.accessToken,
+    refreshToken: session.refreshToken,
+    expiresAt: session.expiresAt
+  });
+});
+
+apiRouter.post('/auth/login', (req: Request, res: Response) => {
+  const { identifier, email, password, deviceId, deviceName } = req.body;
+  const loginKey = (identifier || email || '').trim();
+
+  if (!loginKey) {
+    return res.status(400).json({ error: 'Please enter your email or username' });
+  }
+
+  if (!password) {
+    return res.status(400).json({ error: 'Please enter your password' });
   }
 
   const user = get<User>(
-    'SELECT * FROM users WHERE username = ? OR email = ? OR phone = ? OR id = ?',
-    [identifier, identifier, identifier, identifier]
+    'SELECT * FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?) OR phone = ? OR id = ?',
+    [loginKey, loginKey, loginKey, loginKey]
   );
 
   if (!user) {
-    return res.status(404).json({ error: 'Account not found. Please check your credentials or register.' });
+    return res.status(404).json({ error: 'Account not found. Please check your credentials or create an account.' });
   }
 
   // Authoritative Password Verification via bcrypt
-  if (password && user.password_hash) {
-    const isMatch = comparePassword(password, user.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({ error: 'Incorrect password. Please try again.' });
-    }
+  if (!user.password_hash) {
+    return res.status(400).json({ error: 'This account was created with Google Sign-In. Please sign in with Google.' });
+  }
+
+  const isMatch = comparePassword(password, user.password_hash);
+  if (!isMatch) {
+    return res.status(401).json({ error: 'Incorrect password. Please try again.' });
   }
 
   // Fetch role-specific profile details
@@ -136,24 +317,45 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
     vehicleCategoryId,
     vehicleBrand,
     vehicleModel,
-    vehiclePlate
+    vehiclePlate,
+    deviceId,
+    deviceName
   } = req.body;
 
-  if (!phone || !name) {
-    return res.status(400).json({ error: 'Name and Phone number are required' });
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Full name is required' });
+  }
+
+  if (!email || !email.trim()) {
+    return res.status(400).json({ error: 'Email address is required' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(cleanEmail)) {
+    return res.status(400).json({ error: 'Please enter a valid email address' });
   }
 
   if (!password || password.trim().length < 6) {
     return res.status(400).json({ error: 'Password is required and must be at least 6 characters long' });
   }
 
-  const existingPhone = get<User>('SELECT * FROM users WHERE phone = ?', [phone]);
-  if (existingPhone) {
-    return res.status(409).json({ error: 'An account with this phone number already exists' });
+  const existingEmail = get<User>('SELECT * FROM users WHERE LOWER(email) = ?', [cleanEmail]);
+  if (existingEmail) {
+    return res.status(409).json({ error: 'An account with this email address already exists. Please sign in.' });
   }
 
-  if (username) {
-    const existingUser = get<User>('SELECT * FROM users WHERE username = ?', [username]);
+  const cleanPhone = phone ? phone.trim() : null;
+  if (cleanPhone) {
+    const existingPhone = get<User>('SELECT * FROM users WHERE phone = ?', [cleanPhone]);
+    if (existingPhone) {
+      return res.status(409).json({ error: 'An account with this phone number already exists' });
+    }
+  }
+
+  const cleanUsername = username ? username.trim() : null;
+  if (cleanUsername) {
+    const existingUser = get<User>('SELECT * FROM users WHERE LOWER(username) = LOWER(?)', [cleanUsername]);
     if (existingUser) {
       return res.status(409).json({ error: 'Username is already taken' });
     }
@@ -162,12 +364,13 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
   const userId = `usr_${uuidv4().substring(0, 8)}`;
   const userRole = role || 'PASSENGER';
   const hashedPassword = hashPassword(password);
-  const userEmail = email || `${username || phone}@aditiride.com`;
+  const userPhone = cleanPhone || `+91${Math.floor(6000000000 + Math.random() * 3999999999)}`;
+  const finalUsername = cleanUsername || `${cleanEmail.split('@')[0]}_${Math.floor(100 + Math.random() * 900)}`;
 
   run(`
-    INSERT INTO users (id, username, phone, email, name, role, password_hash, preferred_language, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE')
-  `, [userId, username || null, phone, userEmail, name, userRole, hashedPassword, preferredLanguage || 'en']);
+    INSERT INTO users (id, username, phone, email, name, role, password_hash, auth_provider, preferred_language, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'LOCAL', ?, 'ACTIVE')
+  `, [userId, finalUsername, userPhone, cleanEmail, name.trim(), userRole, hashedPassword, preferredLanguage || 'en']);
 
   if (userRole === 'PASSENGER') {
     run(`
@@ -212,8 +415,31 @@ apiRouter.post('/auth/register', (req: Request, res: Response) => {
   }
 
   const createdUser = get<User>('SELECT * FROM users WHERE id = ?', [userId]);
-  const token = generateToken(createdUser!);
-  res.status(201).json({ user: createdUser, token });
+
+  // Fetch role-specific profile details
+  let roleData: any = {};
+  if (userRole === 'PASSENGER') {
+    roleData = get('SELECT * FROM passenger_profiles WHERE user_id = ?', [userId]);
+  } else if (userRole === 'DRIVER') {
+    roleData = get(`
+      SELECT d.*, v.id as vehicle_id, v.brand as vehicle_brand, v.model as vehicle_model, v.plate_number as vehicle_plate, v.vehicle_category_id
+      FROM driver_profiles d
+      LEFT JOIN vehicles v ON v.driver_id = d.id
+      WHERE d.user_id = ?
+    `, [userId]);
+  }
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const ua = req.headers['user-agent'] || 'AditiRide App';
+  const session = AuthSessionService.createSession(createdUser!, ip, ua, deviceId, deviceName);
+
+  res.status(201).json({
+    user: createdUser,
+    roleData,
+    token: session.accessToken,
+    refreshToken: session.refreshToken,
+    expiresAt: session.expiresAt
+  });
 });
 
 apiRouter.get('/auth/me', authenticateToken, (req: Request, res: Response) => {
