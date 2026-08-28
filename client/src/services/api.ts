@@ -180,6 +180,16 @@ export const api = {
     }
     return res;
   },
+  voiceLogin: async (voiceText: string, preferredLanguage?: string, role?: string) => {
+    const res = await fetchApi('/auth/voice-login', {
+      method: 'POST',
+      body: JSON.stringify({ voiceText, preferredLanguage, role })
+    });
+    if (res.token) {
+      setAuthTokens(res.token, res.refreshToken);
+    }
+    return res;
+  },
   refreshToken: (refreshToken: string) => fetchApi('/auth/refresh', { method: 'POST', body: JSON.stringify({ refreshToken }) }),
   logout: async () => {
     const refreshToken = getRefreshToken();

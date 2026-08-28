@@ -331,4 +331,82 @@ describe('Authentication Pathways: Google Login & Email/Password Suite', () => {
       expect(res.body.user.avatar_url).toBe(mockPayload.picture);
     });
   });
+
+  describe('4. Voice-Activated Authentication Suite (Malayalam & English Speech Login)', () => {
+    it('should authenticate user speaking in Malayalam ("ഞാൻ ധന്യ മേനോൻ")', async () => {
+      const res = await makeRequest('/api/auth/voice-login', {
+        method: 'POST',
+        body: {
+          voiceText: 'ഞാൻ ധന്യ മേനോൻ ലോഗിൻ ചെയ്യുക',
+          preferredLanguage: 'ml'
+        }
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.user).toBeDefined();
+      expect(res.body.user.name).toContain('Dhanya Menon');
+      expect(res.body.user.role).toBe('PASSENGER');
+      expect(res.body.token).toBeDefined();
+      expect(res.body.speechFeedback).toBeDefined();
+      expect(res.body.speechFeedback).toContain('സ്വാഗതം');
+    });
+
+    it('should authenticate captain speaking in Malayalam ("ഡ്രൈവർ രാഹുൽ നായർ")', async () => {
+      const res = await makeRequest('/api/auth/voice-login', {
+        method: 'POST',
+        body: {
+          voiceText: 'ഡ്രൈവർ രാഹുൽ നായർ',
+          preferredLanguage: 'ml'
+        }
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.user).toBeDefined();
+      expect(res.body.user.name).toContain('Rahul');
+      expect(res.body.user.role).toBe('DRIVER');
+      expect(res.body.token).toBeDefined();
+    });
+
+    it('should authenticate user speaking in English ("Login as Dhanya Menon")', async () => {
+      const res = await makeRequest('/api/auth/voice-login', {
+        method: 'POST',
+        body: {
+          voiceText: 'Please log me in as Dhanya Menon',
+          preferredLanguage: 'en'
+        }
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.user).toBeDefined();
+      expect(res.body.user.name).toContain('Dhanya Menon');
+      expect(res.body.token).toBeDefined();
+      expect(res.body.speechFeedback).toContain('Welcome');
+    });
+
+    it('should authenticate user speaking their phone number', async () => {
+      const res = await makeRequest('/api/auth/voice-login', {
+        method: 'POST',
+        body: {
+          voiceText: '+919447123456',
+          preferredLanguage: 'en'
+        }
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.user.phone).toBe('+919447123456');
+    });
+
+    it('should return helpful error for unrecognized voice input', async () => {
+      const res = await makeRequest('/api/auth/voice-login', {
+        method: 'POST',
+        body: {
+          voiceText: 'അജ്ഞാത വ്യക്തി 999xyz',
+          preferredLanguage: 'ml'
+        }
+      });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toMatch(/കണ്ടെത്താനായില്ല|No account found/);
+    });
+  });
 });

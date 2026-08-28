@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { api } from '../../services/api.js';
 import { User, LanguageCode } from '../../types/index.js';
 import { GoogleAuthButton } from './GoogleAuthButton.js';
+import { VoiceLoginModal } from './VoiceLoginModal.js';
 import {
   Compass,
   Lock,
@@ -16,8 +17,10 @@ import {
   Sparkles,
   CheckCircle2,
   Mic,
+  Volume2,
   MapPin,
-  HeartHandshake
+  HeartHandshake,
+  Radio
 } from 'lucide-react';
 
 interface LoginPageProps {
@@ -37,6 +40,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+  const [showVoiceModal, setShowVoiceModal] = useState(false);
   const [activeRoleFilter, setActiveRoleFilter] = useState<'ADMIN' | 'PASSENGER' | 'DRIVER' | 'FLEET'>('PASSENGER');
 
   const handleEmailPasswordLogin = async (e?: React.FormEvent) => {
@@ -124,7 +128,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               </span>
             </h1>
             <p className="text-sm text-slate-400 max-w-md leading-relaxed">
-              Experience prompt rides, heavy logistics, curated Kerala tours, favorite-driver direct dispatches, and multilingual voice booking.
+              Experience prompt rides, heavy logistics, curated Kerala tours, favorite-driver direct dispatches, and multilingual voice booking & login.
             </p>
           </div>
         </div>
@@ -132,11 +136,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({
         {/* Feature Highlights Grid */}
         <div className="grid grid-cols-2 gap-3.5 my-8">
           <div className="p-3.5 bg-slate-900/60 border border-slate-800/80 rounded-2xl space-y-1">
-            <div className="flex items-center space-x-2 text-brand-400">
-              <Mic className="w-4 h-4" />
-              <span className="text-xs font-bold text-slate-200">Voice Booking</span>
+            <div className="flex items-center space-x-2 text-amber-400">
+              <Mic className="w-4 h-4 animate-pulse" />
+              <span className="text-xs font-bold text-slate-200">AI Voice Login</span>
             </div>
-            <p className="text-[11px] text-slate-400">Malayalam, Hindi, Tamil & English natural speech booking</p>
+            <p className="text-[11px] text-slate-400">Speak in Malayalam or English to sign in instantly</p>
           </div>
 
           <div className="p-3.5 bg-slate-900/60 border border-slate-800/80 rounded-2xl space-y-1">
@@ -148,7 +152,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           </div>
 
           <div className="p-3.5 bg-slate-900/60 border border-slate-800/80 rounded-2xl space-y-1">
-            <div className="flex items-center space-x-2 text-amber-400">
+            <div className="flex items-center space-x-2 text-blue-400">
               <Truck className="w-4 h-4" />
               <span className="text-xs font-bold text-slate-200">Logistics & Tours</span>
             </div>
@@ -187,7 +191,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             <div>
               <h2 className="text-2xl font-black text-white tracking-tight">Sign In</h2>
               <p className="text-xs text-slate-400 mt-1">
-                Authenticate with Google or enter your email and password.
+                Choose Google, AI Voice Recognition, or Email & Password.
               </p>
             </div>
 
@@ -259,8 +263,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               </div>
             )}
 
-            {/* PRIMARY AUTH OPTION 1: GOOGLE AUTHENTICATION */}
-            <div className="space-y-2">
+            {/* FAST 1-TAP AUTH ACTIONS: GOOGLE & VOICE */}
+            <div className="space-y-2.5">
+              
+              {/* Google Authentication Button */}
               <GoogleAuthButton
                 text="continue"
                 isLoading={isGoogleLoading}
@@ -268,6 +274,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 onSuccess={handleGoogleSuccess}
                 onError={setErrorMsg}
               />
+
+              {/* AI Voice Recognition Login Button */}
+              <button
+                type="button"
+                onClick={() => setShowVoiceModal(true)}
+                disabled={isLoading || isGoogleLoading}
+                className="w-full py-3 px-4 bg-gradient-to-r from-amber-500/15 via-emerald-500/15 to-teal-500/15 hover:from-amber-500/25 hover:to-emerald-500/25 active:scale-98 border border-amber-500/30 hover:border-amber-400/50 rounded-2xl text-xs sm:text-sm font-extrabold text-amber-300 hover:text-white shadow-lg shadow-amber-500/10 transition-all flex items-center justify-center space-x-2.5 group"
+              >
+                <div className="w-6 h-6 rounded-lg bg-amber-500 text-slate-950 flex items-center justify-center shadow-md group-hover:scale-110 transition-transform">
+                  <Mic className="w-3.5 h-3.5 animate-pulse" />
+                </div>
+                <span>Voice Login / ശബ്ദം വഴി ലോഗിൻ</span>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-400/20 text-amber-200 border border-amber-400/30 uppercase tracking-wider">
+                  AI
+                </span>
+              </button>
+
             </div>
 
             {/* STYLISH DIVIDER */}
@@ -279,7 +302,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               <div className="flex-grow border-t border-slate-800"></div>
             </div>
 
-            {/* PRIMARY AUTH OPTION 2: EMAIL & PASSWORD FORM */}
+            {/* EMAIL & PASSWORD FORM */}
             <form onSubmit={handleEmailPasswordLogin} className="space-y-4">
               
               {/* Email Input */}
@@ -367,6 +390,15 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
         </div>
       </div>
+
+      {/* Voice-Activated AI Login Modal */}
+      <VoiceLoginModal
+        isOpen={showVoiceModal}
+        onClose={() => setShowVoiceModal(false)}
+        onLoginSuccess={onLoginSuccess}
+        defaultLanguage={language}
+        selectedRole={activeRoleFilter}
+      />
 
     </div>
   );

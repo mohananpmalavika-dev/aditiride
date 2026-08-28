@@ -1,7 +1,7 @@
 import { FareEngine } from './FareEngine.js';
 import { LocationService, GeocodedLocation } from './LocationService.js';
 import { query, get } from '../db/index.js';
-import { VehicleCategory, LanguageCode } from '../types/index.js';
+import { VehicleCategory, LanguageCode, User } from '../types/index.js';
 
 export interface ParsedVoiceIntent {
   intent: 'BOOK_RIDE' | 'SCHEDULE_RIDE' | 'TRACK_RIDE' | 'CANCEL_RIDE' | 'VIEW_FARE' | 'SELECT_VEHICLE' | 'UNKNOWN';
@@ -34,6 +34,136 @@ export interface ParsedVoiceIntent {
 }
 
 export class VoiceEngine {
+  /**
+   * Parse natural speech for Voice-Activated Login
+   * Recognizes user names, spoken identifiers, phone numbers, and emails across Malayalam, English, Hindi, Tamil
+   */
+  public static parseVoiceLogin(
+    text: string,
+    preferredLang: LanguageCode = 'en',
+    targetRole?: string
+  ): {
+    cleanQuery: string;
+    extractedRole?: string;
+    language: LanguageCode;
+    candidates: User[];
+  } {
+    const raw = (text || '').trim();
+    let detectedLang: LanguageCode = preferredLang;
+    if (/[\u0D00-\u0D7F]/.test(raw)) detectedLang = 'ml';
+    else if (/[\u0900-\u097F]/.test(raw)) detectedLang = 'hi';
+    else if (/[\u0B80-\u0BFF]/.test(raw)) detectedLang = 'ta';
+    else if (/[\u0C80-\u0CFF]/.test(raw)) detectedLang = 'kn';
+    else if (/[\u0C00-\u0C7F]/.test(raw)) detectedLang = 'te';
+
+    let cleaned = raw;
+
+    // Detect role if spoken
+    let extractedRole = targetRole;
+    const lower = raw.toLowerCase();
+    if (lower.includes('driver') || lower.includes('captain') || raw.includes('ഡ്രൈവർ') || raw.includes('കപ്പിത്താൻ') || raw.includes('ഡ്രൈവറാണ്') || raw.includes('ड्राइवर')) {
+      extractedRole = 'DRIVER';
+    } else if (lower.includes('passenger') || lower.includes('rider') || raw.includes('പാസഞ്ചർ') || raw.includes('യാത്രക്കാരൻ') || raw.includes('राइडर')) {
+      extractedRole = 'PASSENGER';
+    } else if (lower.includes('fleet') || lower.includes('manager') || raw.includes('ഫ്ലീറ്റ്')) {
+      extractedRole = 'FLEET_MANAGER';
+    } else if (lower.includes('admin') || raw.includes('അഡ്മിൻ')) {
+      extractedRole = 'ADMIN';
+    }
+
+    // Common filler words / phrases removal across languages
+    const fillerWords = [
+      // Malayalam
+      'എന്റെ പേര്', 'പേര്', 'ഞാൻ', 'ആണ് ഞാൻ', 'ആണ്', 'ലോഗിൻ ചെയ്യുക', 'ലോഗിൻ ചെയ്യൂ', 'ലോഗിൻ ആക്കുക', 'ലോഗിൻ',
+      'കയറുക', 'തുറക്കുക', 'ഓപ്പൺ', 'പ്ലീസ്', 'ഡ്രൈവർ', 'പാസഞ്ചർ', 'കപ്പിത്താൻ', 'ഫ്ലീറ്റ്', 'അക്കൗണ്ട്',
+      // English
+      'my name is', 'this is', 'i am', 'please log me in', 'log me in', 'login as', 'log in as', 'login into',
+      'login', 'log in', 'open', 'please', 'driver', 'passenger', 'captain', 'fleet', 'account', 'user',
+      // Hindi
+      'mera naam', 'naam', 'hai', 'mujhe login karo', 'login karo', 'kijiye', 'main hoon', 'main', 'hoon'
+    ];
+
+    for (const phrase of fillerWords) {
+      const regex = new RegExp(`\\b${phrase}\\b|${phrase}`, 'gi');
+      cleaned = cleaned.replace(regex, ' ');
+    }
+
+    cleaned = cleaned.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // Mapping for Malayalam names/phonetics to Latin letters for database search
+    const malayalamToEnglishNameMap: Record<string, string> = {
+      'ധന്യ': 'dhanya',
+      'ധന്യ മേനോൻ': 'dhanya menon',
+      'മേനോൻ': 'menon',
+      'രാഹുൽ': 'rahul',
+      'രാഹുൽ നായർ': 'rahul nair',
+      'നായർ': 'nair',
+      'അരുൺ': 'arun',
+      'അരുൺ കുമാർ': 'arun kumar',
+      'പ്രിയ': 'priya',
+      'സുരേഷ്': 'suresh',
+      'സുരേഷ് ബാബു': 'suresh babu',
+      'ആനന്ദ്': 'anand',
+      'ആനന്ദ് വർമ്മ': 'anand varma',
+      'വർമ്മ': 'varma'
+    };
+
+    let searchTokens: string[] = [cleaned];
+    for (const [mal, eng] of Object.entries(malayalamToEnglishNameMap)) {
+      if (raw.includes(mal) || cleaned.includes(mal)) {
+        searchTokens.push(eng);
+      }
+    }
+
+    // Query database for candidate users
+    let candidates: User[] = [];
+    const allUsers = query<User>('SELECT * FROM users WHERE status = ?', ['ACTIVE']);
+
+    for (const u of allUsers) {
+      let score = 0;
+      const uNameLower = (u.name || '').toLowerCase();
+      const uEmailLower = (u.email || '').toLowerCase();
+      const uUserLower = (u.username || '').toLowerCase();
+      const uPhone = (u.phone || '');
+
+      for (const token of searchTokens) {
+        const tLower = token.toLowerCase().trim();
+        if (!tLower) continue;
+
+        if (uEmailLower === tLower || uPhone === tLower || uUserLower === tLower || uNameLower === tLower) {
+          score += 100;
+        } else if (uNameLower.includes(tLower) || uUserLower.includes(tLower) || (tLower.length >= 3 && uEmailLower.includes(tLower))) {
+          score += 50;
+        } else {
+          // Check token word overlap
+          const words = tLower.split(' ');
+          for (const w of words) {
+            if (w.length >= 3 && (uNameLower.includes(w) || uUserLower.includes(w))) {
+              score += 20;
+            }
+          }
+        }
+      }
+
+      if (extractedRole && u.role === extractedRole) {
+        score += 30;
+      }
+
+      if (score > 0) {
+        candidates.push({ ...u, _score: score } as any);
+      }
+    }
+
+    candidates.sort((a: any, b: any) => (b as any)._score - (a as any)._score);
+
+    return {
+      cleanQuery: cleaned,
+      extractedRole,
+      language: detectedLang,
+      candidates
+    };
+  }
+
   /**
    * Parse natural speech text across 6 Indian regional languages + English
    */

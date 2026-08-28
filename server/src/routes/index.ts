@@ -213,6 +213,71 @@ apiRouter.post('/auth/google', (req: Request, res: Response) => {
   });
 });
 
+apiRouter.post('/auth/voice-login', (req: Request, res: Response) => {
+  const { voiceText, preferredLanguage, role, deviceId, deviceName } = req.body;
+
+  if (!voiceText || !voiceText.trim()) {
+    return res.status(400).json({ error: 'Please speak your name, email, or username to log in.' });
+  }
+
+  const parseResult = VoiceEngine.parseVoiceLogin(voiceText, preferredLanguage || 'en', role);
+
+  if (!parseResult.candidates || parseResult.candidates.length === 0) {
+    const errorLangMsg = parseResult.language === 'ml'
+      ? `"${parseResult.cleanQuery || voiceText}" എന്ന പേരിൽ അക്കൗണ്ട് കണ്ടെത്താനായില്ല. ദയവായി പേര് വ്യക്തമായി പറയുക.`
+      : `No account found for "${parseResult.cleanQuery || voiceText}". Please try speaking your name or email.`;
+    return res.status(404).json({
+      error: errorLangMsg,
+      recognizedText: voiceText,
+      cleanQuery: parseResult.cleanQuery
+    });
+  }
+
+  const matchedUser = parseResult.candidates[0];
+
+  // Fetch role-specific profile details
+  let roleData: any = {};
+  if (matchedUser.role === 'PASSENGER') {
+    roleData = get('SELECT * FROM passenger_profiles WHERE user_id = ?', [matchedUser.id]);
+  } else if (matchedUser.role === 'DRIVER') {
+    roleData = get(`
+      SELECT d.*, v.id as vehicle_id, v.brand as vehicle_brand, v.model as vehicle_model, v.plate_number as vehicle_plate, v.vehicle_category_id
+      FROM driver_profiles d
+      LEFT JOIN vehicles v ON v.driver_id = d.id
+      WHERE d.user_id = ?
+    `, [matchedUser.id]);
+  }
+
+  // Create persistent session with refresh token
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const ua = req.headers['user-agent'] || 'AditiRide Voice Client';
+  const session = AuthSessionService.createSession(matchedUser, ip, ua, deviceId, deviceName);
+
+  const roleTitleMap: Record<string, string> = {
+    PASSENGER: parseResult.language === 'ml' ? 'പാസഞ്ചർ' : 'Passenger',
+    DRIVER: parseResult.language === 'ml' ? 'ക്യാപ്റ്റൻ' : 'Captain',
+    FLEET_MANAGER: parseResult.language === 'ml' ? 'ഫ്ലീറ്റ്' : 'Fleet',
+    ADMIN: 'Admin',
+    SUPER_ADMIN: 'Super Admin'
+  };
+  const roleTitle = roleTitleMap[matchedUser.role] || matchedUser.role;
+
+  const speechFeedback = parseResult.language === 'ml'
+    ? `സ്വാഗതം ${matchedUser.name}, നിങ്ങളുടെ ${roleTitle} അക്കൗണ്ടിലേക്ക് വിജയകരമായി ലോഗിൻ ചെയ്തു!`
+    : `Welcome ${matchedUser.name}, successfully signed in to your ${roleTitle} portal!`;
+
+  res.json({
+    success: true,
+    user: matchedUser,
+    roleData,
+    token: session.accessToken,
+    refreshToken: session.refreshToken,
+    expiresAt: session.expiresAt,
+    speechFeedback,
+    recognizedText: voiceText
+  });
+});
+
 apiRouter.post('/auth/login', (req: Request, res: Response) => {
   const { identifier, email, password, deviceId, deviceName } = req.body;
   const loginKey = (identifier || email || '').trim();
